@@ -12,6 +12,15 @@ from flask import Flask, request, jsonify, Response, send_from_directory
 from flask_cors import CORS
 
 from config import DEFAULT_MAX_RESULTS, MAX_RESULTS_CAP, DEFAULT_SHEET_URL
+
+# Bootstrap credentials.json from environment variable (for cloud deployment)
+_creds_env = os.getenv("GOOGLE_CREDENTIALS_JSON")
+if _creds_env and not os.path.exists(os.path.join(os.path.dirname(__file__), "credentials.json")):
+    import base64
+    _creds_path = os.path.join(os.path.dirname(__file__), "credentials.json")
+    with open(_creds_path, "w") as _f:
+        _f.write(base64.b64decode(_creds_env).decode("utf-8"))
+
 from scraper.maps_scraper import scrape_google_maps
 from scraper.website_scraper import extract_contact_info
 from sheets.google_sheets import write_to_sheets, get_service_account_email
