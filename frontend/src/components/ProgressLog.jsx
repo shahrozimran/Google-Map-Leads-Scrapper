@@ -78,7 +78,7 @@ function ProgressLog({ taskId, onComplete, onCountsUpdate }) {
         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse-dot"></div>
         <span className="text-xs font-mono text-zinc-500">LIVE LOG</span>
       </div>
-      <div className="log-panel h-80 overflow-y-auto p-4 font-mono text-sm space-y-0.5">
+      <div className="log-panel h-56 sm:h-80 overflow-y-auto p-3 sm:p-4 font-mono text-xs sm:text-sm space-y-0.5">
         {logs.map((log, i) => (
           <div key={i} className={`animate-fade-in ${getLevelColor(log.level)}`}>
             <span className="text-zinc-600 mr-2">{getLevelPrefix(log.level)}</span>

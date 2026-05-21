@@ -49,9 +49,9 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-black text-white overflow-x-hidden">
       {/* Header */}
-      <header className="border-b border-white/10 px-6 py-4">
+      <header className="border-b border-white/10 px-4 sm:px-6 py-4">
         <div className="max-w-4xl mx-auto flex items-center gap-3">
           <div className="w-2 h-2 bg-white rounded-full"></div>
           <h1 className="text-lg font-semibold tracking-tight">Leads Scraper</h1>
@@ -59,7 +59,7 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-4 sm:space-y-6">
         <SearchForm onStart={handleStart} isRunning={isRunning} />
 
         {status !== 'idle' && (

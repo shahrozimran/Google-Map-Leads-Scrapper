@@ -14,7 +14,7 @@ function SearchForm({ onStart, isRunning }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="bg-surface border border-white/10 p-6 space-y-5">
+    <form onSubmit={handleSubmit} className="bg-surface border border-white/10 p-4 sm:p-6 space-y-4 sm:space-y-5">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2">
           <label className="text-sm text-zinc-400 font-medium">Niche / Business Type</label>
@@ -46,14 +46,14 @@ function SearchForm({ onStart, isRunning }) {
           {[
             { value: 'both', label: 'Both' },
             { value: 'with_website', label: 'With Website' },
-            { value: 'without_website', label: 'Without Website' },
+            { value: 'without_website', label: 'No Website' },
           ].map((opt) => (
             <button
               key={opt.value}
               type="button"
               disabled={isRunning}
               onClick={() => setFilter(opt.value)}
-              className={`py-2 px-3 text-sm font-medium border transition-colors disabled:opacity-50 ${
+              className={`py-2 px-2 sm:px-3 text-xs sm:text-sm font-medium border transition-colors disabled:opacity-50 leading-tight ${
                 filter === opt.value
                   ? 'bg-white text-black border-white'
                   : 'bg-black text-zinc-400 border-white/20 hover:border-white/40'
