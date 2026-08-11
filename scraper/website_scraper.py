@@ -10,7 +10,14 @@ from config import REQUEST_TIMEOUT, USER_AGENT, CONTACT_PATHS, EMAIL_NOISE_DOMAI
 
 # Regex patterns
 EMAIL_REGEX = re.compile(r'[\w.+-]+@[\w-]+\.[\w.]+')
-PHONE_REGEX = re.compile(r'(\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}')
+# International phone: optional country code (+XX), then 7-15 digit number in any grouping
+PHONE_REGEX = re.compile(
+    r'(?:\+\d{1,3}[\s.\-]?)?'      # optional country code, e.g. +44
+    r'(?:\(?\d{1,4}\)?[\s.\-]?)?'   # optional area/trunk prefix
+    r'\d{2,5}'                         # first digit block
+    r'[\s.\-]?\d{2,5}'                # second digit block
+    r'(?:[\s.\-]?\d{2,5})?'           # optional third block
+)
 
 
 def _fetch_page(url):
@@ -42,14 +49,9 @@ def _is_valid_email(email):
 
 
 def _is_valid_phone(phone_str):
-    """Validate phone number: must have 10 digits (US format)."""
+    """Validate phone number: must have 7-15 digits (ITU-T E.164 international standard)."""
     digits = re.sub(r'\D', '', phone_str)
-    # Allow 10 digits or 11 digits starting with 1
-    if len(digits) == 10:
-        return True
-    if len(digits) == 11 and digits.startswith('1'):
-        return True
-    return False
+    return 7 <= len(digits) <= 15
 
 
 def extract_contact_info(website_url):

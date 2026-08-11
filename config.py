@@ -9,12 +9,19 @@ load_dotenv()
 MIN_DELAY = 1.0
 MAX_DELAY = 3.0
 
+# Pagination limits per source
+GOOGLE_SEARCH_MAX_PAGES = 5
+DUCKDUCKGO_MAX_PAGES = 5
+
+# Cross-source enrichment: minimum name similarity to consider a match (0.0 – 1.0)
+ENRICHMENT_NAME_SIMILARITY = 0.85
+
 # Maximum results cap
 MAX_RESULTS_CAP = 500
 DEFAULT_MAX_RESULTS = 100
 
 # Google Sheets — loaded from .env (never hardcoded)
-SHEET_NAME_TEMPLATE = "{niche} - {state} Leads"
+SHEET_NAME_TEMPLATE = "{query} Leads"
 DEFAULT_SHEET_URL = os.getenv("DEFAULT_SHEET_URL", "")
 
 # Website scraper

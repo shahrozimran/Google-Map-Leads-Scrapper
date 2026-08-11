@@ -1,4 +1,4 @@
-"""Google Maps + DuckDuckGo scraper using Selenium (headless Chrome)."""
+"""Google Maps scraper using Selenium (headless Chrome)."""
 
 import random
 import time
@@ -28,33 +28,43 @@ def _create_driver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1280,900")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--lang=en-US,en")
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     )
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        "source": """
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        """
     })
     return driver
 
 
-def scrape_google_maps(niche, state, max_results):
+def scrape_google_maps(query, max_results):
     """
     Generator that yields events:
       {"type": "log", "message": "...", "level": "info|success|error"}
       {"type": "result", "data": {...}}
-    """
-    search_query = f"{niche} in {state}"
-    url = f"https://www.google.com/maps/search/{quote(search_query)}"
 
-    yield {"type": "log", "message": f"Launching browser, searching: {search_query}", "level": "info"}
+    Parameters
+    ----------
+    query       : free-form search query, e.g. "Restaurants in London"
+    max_results : int
+    """
+    url = f"https://www.google.com/maps/search/{quote(query)}"
+
+    yield {"type": "log", "message": f"Google Maps: searching — \"{query}\"", "level": "info"}
 
     driver = None
     try:
@@ -137,6 +147,8 @@ def scrape_google_maps(niche, state, max_results):
                 business = _extract_from_detail_page(driver, item["name"], item["url"])
                 if business:
                     results_collected += 1
+                    # Tag the source so the orchestrator can track origin
+                    business["source"] = "google_maps"
                     yield {"type": "result", "data": business}
 
                     if results_collected % 5 == 0:
@@ -149,16 +161,6 @@ def scrape_google_maps(niche, state, max_results):
 
         maps_count = results_collected
         yield {"type": "log", "message": f"Google Maps: extracted {maps_count} businesses.", "level": "success"}
-
-        # --- Phase 3: DuckDuckGo fallback if not enough results ---
-        if results_collected < max_results:
-            remaining = max_results - results_collected
-            yield {"type": "log", "message": f"Only {results_collected}/{max_results} found. Searching DuckDuckGo for {remaining} more...", "level": "info"}
-
-            for event in _scrape_duckduckgo(driver, niche, state, remaining, seen):
-                if event["type"] == "result":
-                    results_collected += 1
-                yield event
 
         yield {"type": "log", "message": f"Extraction complete. Total: {results_collected} businesses.", "level": "success"}
 
@@ -299,80 +301,3 @@ def _extract_from_detail_page(driver, name, maps_url):
 
     return business
 
-
-def _scrape_duckduckgo(driver, niche, state, max_results, seen_urls):
-    """
-    Fallback: search DuckDuckGo for businesses and extract basic info.
-    Yields same event format as scrape_google_maps.
-    """
-    query = f"{niche} in {state} address phone"
-    ddg_url = f"https://duckduckgo.com/?q={quote(query)}"
-
-    yield {"type": "log", "message": f"DuckDuckGo search: {query}", "level": "info"}
-
-    try:
-        driver.get(ddg_url)
-        time.sleep(3)
-
-        results = driver.find_elements(By.CSS_SELECTOR, 'article[data-testid="result"]')
-        if not results:
-            results = driver.find_elements(By.CSS_SELECTOR, '.result')
-
-        yield {"type": "log", "message": f"DuckDuckGo: found {len(results)} search results", "level": "info"}
-
-        collected = 0
-        for result in results:
-            if collected >= max_results:
-                break
-
-            try:
-                # Extract title
-                title_el = result.find_element(By.CSS_SELECTOR, 'h2 a, a[data-testid="result-title-a"]')
-                title = title_el.text.strip()
-                link = title_el.get_attribute("href") or ""
-
-                if not title or link in seen_urls:
-                    continue
-                seen_urls.add(link)
-
-                # Extract snippet text
-                snippet = ""
-                try:
-                    snippet_el = result.find_element(By.CSS_SELECTOR, 'span[data-testid="result-snippet"], .result__snippet')
-                    snippet = snippet_el.text.strip()
-                except Exception:
-                    pass
-
-                # Try to extract phone from snippet
-                phone = ""
-                phone_match = re.search(r'(\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}', snippet)
-                if phone_match:
-                    phone = phone_match.group(0).strip()
-
-                # Try to extract address-like text from snippet
-                address = ""
-                addr_match = re.search(r'\d+\s+[\w\s]+(?:St|Ave|Blvd|Dr|Rd|Ln|Way|Ct|Pl|Pkwy|Hwy)[\w\s,]*(?:\d{5})?', snippet, re.IGNORECASE)
-                if addr_match:
-                    address = addr_match.group(0).strip()
-
-                business = {
-                    "name": title,
-                    "category": niche,
-                    "address": address,
-                    "phone": phone,
-                    "rating": "",
-                    "reviews": "",
-                    "website": link if "google.com" not in link else "",
-                    "maps_url": "",
-                }
-
-                collected += 1
-                yield {"type": "result", "data": business}
-
-            except Exception:
-                continue
-
-        yield {"type": "log", "message": f"DuckDuckGo: extracted {collected} additional businesses.", "level": "success"}
-
-    except Exception as e:
-        yield {"type": "log", "message": f"DuckDuckGo error: {str(e)}", "level": "error"}

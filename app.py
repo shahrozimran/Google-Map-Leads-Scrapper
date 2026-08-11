@@ -21,9 +21,9 @@ if _creds_env and not os.path.exists(os.path.join(os.path.dirname(__file__), "cr
     with open(_creds_path, "w") as _f:
         _f.write(base64.b64decode(_creds_env).decode("utf-8"))
 
-from scraper.maps_scraper import scrape_google_maps
+from scraper.orchestrator import scrape_all_sources
 from scraper.website_scraper import extract_contact_info
-from sheets.google_sheets import write_to_sheets, get_service_account_email
+from sheets.google_sheets import write_to_sheets, get_service_account_email, clear_sheet
 
 app = Flask(__name__, static_folder="frontend/dist", static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -32,7 +32,7 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 tasks = {}
 
 
-def run_scrape_task(task_id, niche, state, max_results, sheet_url=None, filter_type="both"):
+def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="both", sources=None):
     """Background thread that runs the full scraping pipeline."""
     task = tasks[task_id]
     log_queue = task["log_queue"]
@@ -41,19 +41,26 @@ def run_scrape_task(task_id, niche, state, max_results, sheet_url=None, filter_t
         log_queue.put(json.dumps({"message": msg, "level": level, "time": time.time()}))
 
     try:
-        emit(f"Starting scrape: '{niche}' in '{state}' (max {max_results} results)")
-        task["status"] = "scraping_maps"
+        emit(f"Starting scrape: \"{query}\" (max {max_results} results) | Sources: {', '.join(sources or ['all'])}")
+        task["status"] = "scraping_sources"
 
-        # Step 1: Scrape Google Maps
+        # Step 1: Scrape all three sources in parallel
         businesses = []
-        for event in scrape_google_maps(niche, state, max_results):
+        for event in scrape_all_sources(query, max_results, sources=sources):
             if event["type"] == "log":
                 emit(event["message"], event.get("level", "info"))
             elif event["type"] == "result":
                 businesses.append(event["data"])
                 task["counts"]["total"] = len(businesses)
+            elif event["type"] == "summary":
+                # Per-source breakdown from the orchestrator
+                sc = event.get("counts", {})
+                task["counts"]["from_maps"]       = sc.get("from_maps", 0)
+                task["counts"]["from_google"]     = sc.get("from_google", 0)
+                task["counts"]["from_duckduckgo"] = sc.get("from_duckduckgo", 0)
+                task["counts"]["enriched"]        = sc.get("enriched", 0)
 
-        emit(f"Google Maps scraping complete. Found {len(businesses)} businesses.", "success")
+        emit(f"All sources complete. Unique leads found: {len(businesses)}.", "success")
 
         # Step 2: Split into with/without website
         all_with_website = [b for b in businesses if b.get("website")]
@@ -103,7 +110,7 @@ def run_scrape_task(task_id, niche, state, max_results, sheet_url=None, filter_t
             task["status"] = "completed"
             task["sheet_url"] = None
         else:
-            sheet_url = write_to_sheets(niche, state, with_website, without_website, credentials_path, sheet_url=sheet_url)
+            sheet_url = write_to_sheets(query, with_website, without_website, credentials_path, sheet_url=sheet_url)
             task["sheet_url"] = sheet_url
             emit("Google Sheet updated successfully.", "success")
             task["status"] = "completed"
@@ -120,25 +127,49 @@ def run_scrape_task(task_id, niche, state, max_results, sheet_url=None, filter_t
 def start_scrape():
     """Start a new scraping task."""
     data = request.get_json()
-    niche = data.get("niche", "").strip()
-    state = data.get("state", "").strip()
+    # Accept a free-form 'query' (e.g. "Restaurants in London").
+    # Backward-compatible: also accept legacy niche + state fields.
+    query = data.get("query", "").strip()
+    if not query:
+        niche = data.get("niche", "").strip()
+        state = data.get("state", "").strip()
+        if niche and state:
+            query = f"{niche} in {state}"
+        elif niche:
+            query = niche
     max_results = min(int(data.get("max_results", DEFAULT_MAX_RESULTS)), MAX_RESULTS_CAP)
     sheet_url = data.get("sheet_url", "").strip() or DEFAULT_SHEET_URL
     filter_type = data.get("filter", "both")
+    # Sources: list of "google_maps", "google_search", "duckduckgo" — default all
+    sources = data.get("sources", ["google_maps", "google_search", "duckduckgo"])
+    if not isinstance(sources, list) or not sources:
+        sources = ["google_maps", "google_search", "duckduckgo"]
 
-    if not niche or not state:
-        return jsonify({"error": "Both 'niche' and 'state' are required."}), 400
+    if not query:
+        return jsonify({"error": "A 'query' field is required (e.g. 'Restaurants in London')."}), 400
 
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
         "status": "pending",
         "log_queue": queue.Queue(),
-        "counts": {"total": 0, "with_website": 0, "without_website": 0},
+        "counts": {
+            "total": 0,
+            "with_website": 0,
+            "without_website": 0,
+            "from_maps": 0,
+            "from_google": 0,
+            "from_duckduckgo": 0,
+            "enriched": 0,
+        },
         "sheet_url": None,
         "error": None,
     }
 
-    thread = threading.Thread(target=run_scrape_task, args=(task_id, niche, state, max_results, sheet_url, filter_type), daemon=True)
+    thread = threading.Thread(
+        target=run_scrape_task,
+        args=(task_id, query, max_results, sheet_url, filter_type, sources),
+        daemon=True,
+    )
     thread.start()
 
     return jsonify({"task_id": task_id}), 202
@@ -190,6 +221,27 @@ def task_status(task_id):
         "sheet_url": task["sheet_url"],
         "error": task["error"],
     })
+
+
+@app.route("/api/clear-sheet", methods=["POST"])
+def clear_sheet_endpoint():
+    """Clear all data from both worksheets in the given sheet URL."""
+    data = request.get_json()
+    sheet_url = (data.get("sheet_url") or "").strip()
+    if not sheet_url:
+        sheet_url = DEFAULT_SHEET_URL
+    if not sheet_url:
+        return jsonify({"error": "No sheet_url provided."}), 400
+
+    credentials_path = os.path.join(os.path.dirname(__file__), "credentials.json")
+    if not os.path.exists(credentials_path):
+        return jsonify({"error": "credentials.json not found."}), 500
+
+    try:
+        clear_sheet(sheet_url, credentials_path)
+        return jsonify({"success": True, "message": "Sheet cleared successfully."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/service-account-email")

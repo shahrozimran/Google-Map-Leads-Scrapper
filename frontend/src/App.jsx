@@ -7,21 +7,24 @@ import ResultLink from './components/ResultLink'
 function App() {
   const [taskId, setTaskId] = useState(null)
   const [isRunning, setIsRunning] = useState(false)
-  const [counts, setCounts] = useState({ total: 0, with_website: 0, without_website: 0 })
+  const [counts, setCounts] = useState({
+    total: 0, with_website: 0, without_website: 0,
+    from_maps: 0, from_google: 0, from_duckduckgo: 0, enriched: 0
+  })
   const [sheetUrl, setSheetUrl] = useState(null)
   const [status, setStatus] = useState('idle')
 
-  const handleStart = async (niche, state, maxResults, filter) => {
+  const handleStart = async (query, maxResults, filter, sources) => {
     setIsRunning(true)
     setSheetUrl(null)
-    setCounts({ total: 0, with_website: 0, without_website: 0 })
+    setCounts({ total: 0, with_website: 0, without_website: 0, from_maps: 0, from_google: 0, from_duckduckgo: 0, enriched: 0 })
     setStatus('running')
 
     try {
       const res = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ niche, state, max_results: maxResults, filter }),
+        body: JSON.stringify({ query, max_results: maxResults, filter, sources }),
       })
       const data = await res.json()
       if (data.task_id) {

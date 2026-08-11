@@ -13,12 +13,12 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-WITH_WEBSITE_HEADERS = ["Name", "Category", "Address", "Phone", "Email(s)", "Website", "Rating", "Reviews", "Maps URL"]
-WITHOUT_WEBSITE_HEADERS = ["Name", "Category", "Address", "Phone", "Email(s)", "Rating", "Reviews", "Maps URL"]
+WITH_WEBSITE_HEADERS = ["Lead ID", "Name", "Category", "Address", "Phone", "Email(s)", "Website", "Rating", "Reviews", "Source", "Maps URL"]
+WITHOUT_WEBSITE_HEADERS = ["Lead ID", "Name", "Category", "Address", "Phone", "Email(s)", "Rating", "Reviews", "Source", "Maps URL"]
 
 # Desired column widths (pixels) for clean formatting
-WITH_WEBSITE_WIDTHS = [200, 150, 250, 150, 220, 250, 70, 80, 300]
-WITHOUT_WEBSITE_WIDTHS = [200, 150, 250, 150, 220, 70, 80, 300]
+WITH_WEBSITE_WIDTHS = [130, 200, 150, 250, 150, 220, 250, 70, 80, 160, 300]
+WITHOUT_WEBSITE_WIDTHS = [130, 200, 150, 250, 150, 220, 70, 80, 160, 300]
 
 
 def _get_client(credentials_path):
@@ -203,11 +203,98 @@ def _format_worksheet(spreadsheet, worksheet, num_cols, col_widths):
     spreadsheet.batch_update({"requests": requests})
 
 
-def write_to_sheets(niche, state, with_website, without_website, credentials_path, sheet_url=None):
+def _build_with_website_row(biz):
+    """Build a row list for the 'With Website' sheet from a business dict."""
+    emails = biz.get("emails", [])
+    # Filter out any values that look like phone numbers (digits only)
+    if isinstance(emails, list):
+        clean_emails = [
+            e for e in emails
+            if e and "@" in e and e.strip().lower() not in ("not found", "")
+        ]
+        email_str = ", ".join(clean_emails) if clean_emails else "Not Found"
+    else:
+        email_str = str(emails) if emails else "Not Found"
+
+    phone = _safe_phone(biz.get("phone", ""))
+
+    return [
+        biz.get("lead_id", "").strip(),
+        biz.get("name", "").strip(),
+        biz.get("category", "").strip(),
+        biz.get("address", "").strip(),
+        phone,
+        email_str,
+        biz.get("website", "").strip(),
+        biz.get("rating", "").strip(),
+        biz.get("reviews", "").strip(),
+        biz.get("source", "").strip(),
+        biz.get("maps_url", "").strip(),
+    ]
+
+
+def _build_without_website_row(biz):
+    """Build a row list for the 'Without Website' sheet from a business dict."""
+    emails = biz.get("emails", [])
+    if isinstance(emails, list):
+        clean_emails = [
+            e for e in emails
+            if e and "@" in e and e.strip().lower() not in ("not found", "")
+        ]
+        email_str = ", ".join(clean_emails) if clean_emails else ""
+    else:
+        email_str = ""
+
+    phone = _safe_phone(biz.get("phone", ""))
+
+    return [
+        biz.get("lead_id", "").strip(),
+        biz.get("name", "").strip(),
+        biz.get("category", "").strip(),
+        biz.get("address", "").strip(),
+        phone,
+        email_str,
+        biz.get("rating", "").strip(),
+        biz.get("reviews", "").strip(),
+        biz.get("source", "").strip(),
+        biz.get("maps_url", "").strip(),
+    ]
+
+
+def clear_sheet(sheet_url, credentials_path):
+    """
+    Clear all DATA from both worksheets, then restore the correct header row.
+    The sheet will always have the right column labels after this call.
+    """
+    client = _get_client(credentials_path)
+    sheet_id = _extract_sheet_id(sheet_url)
+    spreadsheet = client.open_by_key(sheet_id)
+
+    ws_config = [
+        ("With Website",    len(WITH_WEBSITE_HEADERS),    WITH_WEBSITE_HEADERS,    WITH_WEBSITE_WIDTHS),
+        ("Without Website", len(WITHOUT_WEBSITE_HEADERS), WITHOUT_WEBSITE_HEADERS, WITHOUT_WEBSITE_WIDTHS),
+    ]
+
+    for title, num_cols, headers, widths in ws_config:
+        try:
+            ws = spreadsheet.worksheet(title)
+        except gspread.WorksheetNotFound:
+            ws = spreadsheet.add_worksheet(title=title, rows=1000, cols=num_cols)
+
+        # Clear everything, then put headers back immediately
+        ws.clear()
+        ws.update("A1", [headers], value_input_option="USER_ENTERED")
+        _format_worksheet(spreadsheet, ws, num_cols, widths)
+
+    return True
+
+
+def write_to_sheets(query, with_website, without_website, credentials_path, sheet_url=None):
     """
     Write results to a Google Sheet.
+    Always clears existing data before writing to guarantee correct column alignment.
     If sheet_url is provided, open that sheet (user-created, shared with service account).
-    Otherwise, try to create a new one.
+    Otherwise, create/open a sheet named after the query.
     Returns the shareable URL.
     """
     client = _get_client(credentials_path)
@@ -216,7 +303,8 @@ def write_to_sheets(niche, state, with_website, without_website, credentials_pat
         sheet_id = _extract_sheet_id(sheet_url)
         spreadsheet = client.open_by_key(sheet_id)
     else:
-        sheet_name = SHEET_NAME_TEMPLATE.format(niche=niche, state=state)
+        safe_query = query.strip()[:50]
+        sheet_name = SHEET_NAME_TEMPLATE.format(query=safe_query)
         try:
             spreadsheet = client.open(sheet_name)
         except gspread.SpreadsheetNotFound:
@@ -224,80 +312,29 @@ def write_to_sheets(niche, state, with_website, without_website, credentials_pat
             spreadsheet.share(None, perm_type="anyone", role="reader")
 
     # --- "With Website" worksheet ---
-    ws_with = _get_or_create_worksheet(spreadsheet, "With Website", 10)
-    existing_with = ws_with.get_all_values()
+    ws_with = _get_or_create_worksheet(spreadsheet, "With Website", len(WITH_WEBSITE_HEADERS))
+    # Always clear first — guarantees headers and columns are always aligned
+    ws_with.clear()
 
-    # Write headers if empty or header row is blank
-    has_headers_with = existing_with and any(cell.strip() for cell in existing_with[0])
-    if not has_headers_with:
-        ws_with.update("A1", [WITH_WEBSITE_HEADERS], value_input_option="USER_ENTERED")
-        existing_with = [WITH_WEBSITE_HEADERS]
+    rows_with = [_build_with_website_row(biz) for biz in with_website]
 
-    # Get existing names to skip duplicates
-    existing_names_with = {row[0].strip().lower() for row in existing_with[1:] if row and row[0].strip()}
-
-    rows_with = []
-    for biz in with_website:
-        name = biz.get("name", "").strip()
-        if name.lower() in existing_names_with:
-            continue
-        existing_names_with.add(name.lower())
-        emails = biz.get("emails", ["Not Found"])
-        email_str = ", ".join(emails) if isinstance(emails, list) else str(emails)
-        phone = _safe_phone(biz.get("phone", ""))
-        rows_with.append([
-            name,
-            biz.get("category", ""),
-            biz.get("address", ""),
-            phone,
-            email_str,
-            biz.get("website", ""),
-            biz.get("rating", ""),
-            biz.get("reviews", ""),
-            biz.get("maps_url", ""),
-        ])
+    # Write header + data in one batch call
+    all_with = [WITH_WEBSITE_HEADERS] + rows_with
+    ws_with.update("A1", all_with, value_input_option="USER_ENTERED")
 
     if rows_with:
-        next_row = len(existing_with) + 1
-        cell_range = f"A{next_row}"
-        ws_with.update(cell_range, rows_with, value_input_option="USER_ENTERED")
         _format_worksheet(spreadsheet, ws_with, len(WITH_WEBSITE_HEADERS), WITH_WEBSITE_WIDTHS)
 
     # --- "Without Website" worksheet ---
-    ws_without = _get_or_create_worksheet(spreadsheet, "Without Website", 8)
-    existing_without = ws_without.get_all_values()
+    ws_without = _get_or_create_worksheet(spreadsheet, "Without Website", len(WITHOUT_WEBSITE_HEADERS))
+    ws_without.clear()
 
-    has_headers_without = existing_without and any(cell.strip() for cell in existing_without[0])
-    if not has_headers_without:
-        ws_without.update("A1", [WITHOUT_WEBSITE_HEADERS], value_input_option="USER_ENTERED")
-        existing_without = [WITHOUT_WEBSITE_HEADERS]
+    rows_without = [_build_without_website_row(biz) for biz in without_website]
 
-    existing_names_without = {row[0].strip().lower() for row in existing_without[1:] if row and row[0].strip()}
-
-    rows_without = []
-    for biz in without_website:
-        name = biz.get("name", "").strip()
-        if name.lower() in existing_names_without:
-            continue
-        existing_names_without.add(name.lower())
-        phone = _safe_phone(biz.get("phone", ""))
-        emails = biz.get("emails", [])
-        email_str = ", ".join(emails) if isinstance(emails, list) and emails else ""
-        rows_without.append([
-            name,
-            biz.get("category", ""),
-            biz.get("address", ""),
-            phone,
-            email_str,
-            biz.get("rating", ""),
-            biz.get("reviews", ""),
-            biz.get("maps_url", ""),
-        ])
+    all_without = [WITHOUT_WEBSITE_HEADERS] + rows_without
+    ws_without.update("A1", all_without, value_input_option="USER_ENTERED")
 
     if rows_without:
-        next_row = len(existing_without) + 1
-        cell_range = f"A{next_row}"
-        ws_without.update(cell_range, rows_without, value_input_option="USER_ENTERED")
         _format_worksheet(spreadsheet, ws_without, len(WITHOUT_WEBSITE_HEADERS), WITHOUT_WEBSITE_WIDTHS)
 
     # Remove the default "Sheet1" if it exists
