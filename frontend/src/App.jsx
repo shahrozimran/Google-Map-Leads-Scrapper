@@ -3,6 +3,7 @@ import SearchForm from './components/SearchForm'
 import ProgressLog from './components/ProgressLog'
 import StatsBanner from './components/StatsBanner'
 import ResultLink from './components/ResultLink'
+import EmailOutreachModal from './components/EmailOutreachModal'
 
 function App() {
   const [taskId, setTaskId] = useState(null)
@@ -13,6 +14,7 @@ function App() {
   })
   const [sheetUrl, setSheetUrl] = useState(null)
   const [status, setStatus] = useState('idle')
+  const [isEmailModalOpen, setIsEmailModalOpen] = useState(false)
 
   const handleStart = async (query, maxResults, filter, sources) => {
     setIsRunning(true)
@@ -55,9 +57,18 @@ function App() {
     <div className="min-h-screen bg-black text-white overflow-x-hidden">
       {/* Header */}
       <header className="border-b border-white/10 px-4 sm:px-6 py-4">
-        <div className="max-w-4xl mx-auto flex items-center gap-3">
-          <div className="w-2 h-2 bg-white rounded-full"></div>
-          <h1 className="text-lg font-semibold tracking-tight">Leads Scraper</h1>
+        <div className="max-w-4xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full shadow-[0_0_8px_#10b981]"></div>
+            <h1 className="text-lg font-bold tracking-tight text-white">Google Maps Leads Generator</h1>
+          </div>
+          <button
+            onClick={() => setIsEmailModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg font-semibold text-xs transition-all shadow-[0_0_15px_rgba(16,185,129,0.15)] hover:shadow-[0_0_20px_rgba(16,185,129,0.3)]"
+          >
+            <span>✉️</span>
+            <span>Send Outreach Emails</span>
+          </button>
         </div>
       </header>
 
@@ -79,6 +90,13 @@ function App() {
           </>
         )}
       </main>
+
+      {/* Email Outreach Modal */}
+      <EmailOutreachModal
+        isOpen={isEmailModalOpen}
+        onClose={() => setIsEmailModalOpen(false)}
+        sheetUrl={sheetUrl}
+      />
     </div>
   )
 }

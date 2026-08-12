@@ -6,12 +6,21 @@ import json
 import time
 import queue
 import os
+import random
 from urllib.parse import urlparse
 
 from flask import Flask, request, jsonify, Response, send_from_directory
 from flask_cors import CORS
 
-from config import DEFAULT_MAX_RESULTS, MAX_RESULTS_CAP, DEFAULT_SHEET_URL
+from config import (
+    DEFAULT_MAX_RESULTS,
+    MAX_RESULTS_CAP,
+    DEFAULT_SHEET_URL,
+    SENDER_EMAIL,
+    SENDER_NAME,
+    SMTP_USERNAME,
+    SMTP_PASSWORD
+)
 
 # Bootstrap credentials.json from environment variable (for cloud deployment)
 _creds_env = os.getenv("GOOGLE_CREDENTIALS_JSON")
@@ -23,13 +32,22 @@ if _creds_env and not os.path.exists(os.path.join(os.path.dirname(__file__), "cr
 
 from scraper.orchestrator import scrape_all_sources
 from scraper.website_scraper import extract_contact_info
-from sheets.google_sheets import write_to_sheets, get_service_account_email, clear_sheet
+from sheets.google_sheets import (
+    write_to_sheets,
+    get_service_account_email,
+    clear_sheet,
+    read_leads_from_sheet,
+    update_lead_email_status
+)
+from email_templates import generate_email_content
+from email_sender import send_outreach_email, test_smtp_connection
 
 app = Flask(__name__, static_folder="frontend/dist", static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# In-memory task store
+# In-memory task stores
 tasks = {}
+outreach_tasks = {}
 
 
 def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="both", sources=None):
@@ -44,7 +62,6 @@ def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="bo
         emit(f"Starting scrape: \"{query}\" (max {max_results} results) | Sources: {', '.join(sources or ['all'])}")
         task["status"] = "scraping_sources"
 
-        # Step 1: Scrape all three sources in parallel
         businesses = []
         for event in scrape_all_sources(query, max_results, sources=sources):
             if event["type"] == "log":
@@ -53,7 +70,6 @@ def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="bo
                 businesses.append(event["data"])
                 task["counts"]["total"] = len(businesses)
             elif event["type"] == "summary":
-                # Per-source breakdown from the orchestrator
                 sc = event.get("counts", {})
                 task["counts"]["from_maps"]       = sc.get("from_maps", 0)
                 task["counts"]["from_google"]     = sc.get("from_google", 0)
@@ -62,11 +78,9 @@ def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="bo
 
         emit(f"All sources complete. Unique leads found: {len(businesses)}.", "success")
 
-        # Step 2: Split into with/without website
         all_with_website = [b for b in businesses if b.get("website")]
         all_without_website = [b for b in businesses if not b.get("website")]
 
-        # Apply filter
         if filter_type == "with_website":
             with_website = all_with_website
             without_website = []
@@ -84,7 +98,6 @@ def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="bo
         if filter_type != "both":
             emit(f"Filter applied: {filter_type.replace('_', ' ')}")
 
-        # Step 3: Extract emails and phones from business websites
         task["status"] = "scraping_websites"
         for i, biz in enumerate(with_website):
             domain = urlparse(biz['website']).netloc or biz['website']
@@ -100,7 +113,6 @@ def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="bo
 
         emit("Website scanning complete.", "success")
 
-        # Step 4: Write to Google Sheets
         task["status"] = "writing_sheets"
         emit("Writing results to Google Sheets...")
 
@@ -123,12 +135,122 @@ def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="bo
         task["error"] = str(e)
 
 
+def run_outreach_task(task_id, sheet_url, custom_template=None):
+    """Background thread that executes cold outreach campaign."""
+    task = outreach_tasks[task_id]
+    log_queue = task["log_queue"]
+
+    def emit(msg, level="info", payload=None):
+        data = {"message": msg, "level": level, "time": time.time()}
+        if payload:
+            data.update(payload)
+        log_queue.put(json.dumps(data))
+
+    try:
+        credentials_path = os.path.join(os.path.dirname(__file__), "credentials.json")
+        if not os.path.exists(credentials_path):
+            emit("ERROR: credentials.json not found.", "error")
+            task["status"] = "error"
+            return
+
+        emit("Verifying SMTP server connection...")
+        conn_test = test_smtp_connection()
+        if not conn_test["success"]:
+            emit(f"SMTP Connection Error: {conn_test['error']}", "error")
+            task["status"] = "error"
+            return
+        emit("SMTP Server connection verified successfully.", "success")
+
+        emit("Fetching leads queue from Google Sheet...")
+        leads = read_leads_from_sheet(sheet_url, credentials_path)
+
+        # Filter queue: valid email + status != 'Sent'
+        target_leads = []
+        for lead in leads:
+            raw_email = lead.get("emails", "").strip()
+            status = lead.get("email_status", "").strip()
+
+            if raw_email and "@" in raw_email and raw_email.lower() != "not found" and status != "Sent":
+                # If multiple emails, take first clean email
+                first_email = [e.strip() for e in raw_email.split(",") if "@" in e][0]
+                lead["target_email"] = first_email
+                target_leads.append(lead)
+
+        task["total_queue"] = len(target_leads)
+        emit(f"Found {len(target_leads)} eligible lead(s) ready for outreach campaign.")
+
+        if not target_leads:
+            emit("No pending leads found to email. Campaign finished.", "success")
+            task["status"] = "completed"
+            return
+
+        sent_count = 0
+        failed_count = 0
+
+        for idx, lead in enumerate(target_leads, start=1):
+            if task.get("stopped"):
+                emit("Outreach campaign cancelled by user.", "warning")
+                task["status"] = "cancelled"
+                return
+
+            recipient = lead["target_email"]
+            name = lead.get("name")
+            location = lead.get("address")
+            category = lead.get("category")
+
+            emit(f"[{idx}/{len(target_leads)}] Preparing cold email for {name} ({recipient})...")
+
+            # Generate content
+            content = generate_email_content(name, location, category)
+
+            # Send email
+            res = send_outreach_email(
+                recipient_email=recipient,
+                subject=content["subject"],
+                html_body=content["html_body"],
+                text_body=content["text_body"]
+            )
+
+            if res["success"]:
+                sent_count += 1
+                task["sent_count"] = sent_count
+                emit(f"[{idx}/{len(target_leads)}] Delivered email to {recipient}", "success")
+                
+                # Update status in Google Sheets
+                try:
+                    update_lead_email_status(
+                        sheet_url=sheet_url,
+                        credentials_path=credentials_path,
+                        worksheet_title=lead["worksheet_title"],
+                        row_index=lead["row_index"],
+                        new_status="Sent"
+                    )
+                    emit(f"Updated row #{lead['row_index']} status in '{lead['worksheet_title']}' -> Sent", "info")
+                except Exception as ex:
+                    emit(f"Warning: Could not update sheet status for {name}: {ex}", "warning")
+            else:
+                failed_count += 1
+                task["failed_count"] = failed_count
+                emit(f"[{idx}/{len(target_leads)}] Failed to send to {recipient}: {res['error']}", "error")
+
+            # Apply anti-spam throttling delay if not last item
+            if idx < len(target_leads) and not task.get("stopped"):
+                delay = random.uniform(5.0, 12.0)
+                emit(f"Throttling delay: waiting {delay:.1f}s before next email...", "info")
+                time.sleep(delay)
+
+        emit(f"Outreach campaign complete! Sent: {sent_count}, Failed: {failed_count}", "success")
+        task["status"] = "completed"
+
+    except Exception as e:
+        emit(f"Fatal outreach error: {str(e)}", "error")
+        task["status"] = "error"
+
+
 @app.route("/api/scrape", methods=["POST"])
 def start_scrape():
     """Start a new scraping task."""
     data = request.get_json()
-    # Accept a free-form 'query' (e.g. "Restaurants in London").
-    # Backward-compatible: also accept legacy niche + state fields.
     query = data.get("query", "").strip()
     if not query:
         niche = data.get("niche", "").strip()
@@ -140,13 +262,12 @@ def start_scrape():
     max_results = min(int(data.get("max_results", DEFAULT_MAX_RESULTS)), MAX_RESULTS_CAP)
     sheet_url = data.get("sheet_url", "").strip() or DEFAULT_SHEET_URL
     filter_type = data.get("filter", "both")
-    # Sources: list of "google_maps", "google_search", "duckduckgo" — default all
     sources = data.get("sources", ["google_maps", "google_search", "duckduckgo"])
     if not isinstance(sources, list) or not sources:
         sources = ["google_maps", "google_search", "duckduckgo"]
 
     if not query:
-        return jsonify({"error": "A 'query' field is required (e.g. 'Restaurants in London')."}), 400
+        return jsonify({"error": "A 'query' field is required."}), 400
 
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
@@ -189,10 +310,8 @@ def progress_stream(task_id):
                 msg = log_queue.get(timeout=1)
                 yield f"data: {msg}\n\n"
             except queue.Empty:
-                # Send keepalive
                 yield f"data: {json.dumps({'keepalive': True})}\n\n"
                 if task["status"] in ("completed", "error"):
-                    # Send final status
                     final = json.dumps({
                         "done": True,
                         "status": task["status"],
@@ -208,9 +327,134 @@ def progress_stream(task_id):
     })
 
 
+@app.route("/api/outreach-preview", methods=["GET"])
+def outreach_preview():
+    """Get lead campaign queue stats and HTML/Text email template preview."""
+    sheet_url = request.args.get("sheet_url", "").strip() or DEFAULT_SHEET_URL
+    credentials_path = os.path.join(os.path.dirname(__file__), "credentials.json")
+
+    queue_count = 0
+    total_leads = 0
+    sent_count = 0
+
+    if sheet_url and os.path.exists(credentials_path):
+        try:
+            leads = read_leads_from_sheet(sheet_url, credentials_path)
+            total_leads = len(leads)
+            for l in leads:
+                status = l.get("email_status", "")
+                emails = l.get("emails", "")
+                if status == "Sent":
+                    sent_count += 1
+                elif emails and "@" in emails and emails.lower() != "not found":
+                    queue_count += 1
+        except Exception as e:
+            app.logger.error(f"Error reading preview leads: {e}")
+
+    sample_content = generate_email_content("Acme Software Inc", "Tokyo, Japan", "IT Consulting")
+
+    return jsonify({
+        "total_leads": total_leads,
+        "queue_count": queue_count,
+        "sent_count": sent_count,
+        "sender_email": SENDER_EMAIL,
+        "sender_name": SENDER_NAME,
+        "sample_preview": sample_content
+    })
+
+
+@app.route("/api/send-outreach", methods=["POST"])
+def start_outreach():
+    """Launch SSE automated email outreach campaign task."""
+    data = request.get_json() or {}
+    sheet_url = data.get("sheet_url", "").strip() or DEFAULT_SHEET_URL
+
+    if not sheet_url:
+        return jsonify({"error": "Google Sheet URL is required."}), 400
+
+    task_id = str(uuid.uuid4())
+    outreach_tasks[task_id] = {
+        "status": "pending",
+        "log_queue": queue.Queue(),
+        "total_queue": 0,
+        "sent_count": 0,
+        "failed_count": 0,
+        "stopped": False
+    }
+
+    thread = threading.Thread(
+        target=run_outreach_task,
+        args=(task_id, sheet_url),
+        daemon=True
+    )
+    thread.start()
+
+    return jsonify({"task_id": task_id}), 202
+
+
+@app.route("/api/outreach-progress/<task_id>")
+def outreach_progress_stream(task_id):
+    """SSE endpoint for live outreach progress log streaming."""
+    if task_id not in outreach_tasks:
+        return jsonify({"error": "Task not found"}), 404
+
+    def generate():
+        task = outreach_tasks[task_id]
+        log_queue = task["log_queue"]
+        while True:
+            try:
+                msg = log_queue.get(timeout=1)
+                yield f"data: {msg}\n\n"
+            except queue.Empty:
+                yield f"data: {json.dumps({'keepalive': True})}\n\n"
+                if task["status"] in ("completed", "error", "cancelled"):
+                    final = json.dumps({
+                        "done": True,
+                        "status": task["status"],
+                        "sent_count": task["sent_count"],
+                        "failed_count": task["failed_count"],
+                    })
+                    yield f"data: {final}\n\n"
+                    break
+
+    return Response(generate(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+
+
+@app.route("/api/stop-outreach/<task_id>", methods=["POST"])
+def stop_outreach(task_id):
+    """Stop/cancel an in-progress outreach campaign."""
+    if task_id in outreach_tasks:
+        outreach_tasks[task_id]["stopped"] = True
+        return jsonify({"success": True, "message": "Outreach cancellation requested."})
+    return jsonify({"error": "Task not found"}), 404
+
+
+@app.route("/api/test-email", methods=["POST"])
+def test_email():
+    """Send a test email to a specified test address."""
+    data = request.get_json() or {}
+    test_address = (data.get("test_email") or "").strip()
+    if not test_address or "@" not in test_address:
+        return jsonify({"error": "Valid test_email is required."}), 400
+
+    content = generate_email_content("Test Partner", "Sample Location", "Test Industry")
+    res = send_outreach_email(
+        recipient_email=test_address,
+        subject=f"[TEST] {content['subject']}",
+        html_body=content["html_body"],
+        text_body=content["text_body"]
+    )
+    if res["success"]:
+        return jsonify({"success": True, "message": f"Test email sent to {test_address}"})
+    return jsonify({"error": res["error"]}), 500
+
+
 @app.route("/api/status/<task_id>")
 def task_status(task_id):
-    """Get current task status."""
+    """Get current scrape task status."""
     if task_id not in tasks:
         return jsonify({"error": "Task not found"}), 404
 
@@ -227,9 +471,7 @@ def task_status(task_id):
 def clear_sheet_endpoint():
     """Clear all data from both worksheets in the given sheet URL."""
     data = request.get_json()
-    sheet_url = (data.get("sheet_url") or "").strip()
-    if not sheet_url:
-        sheet_url = DEFAULT_SHEET_URL
+    sheet_url = (data.get("sheet_url") or "").strip() or DEFAULT_SHEET_URL
     if not sheet_url:
         return jsonify({"error": "No sheet_url provided."}), 400
 
@@ -254,7 +496,6 @@ def service_account_email():
     return jsonify({"email": None, "error": "credentials.json not found"}), 404
 
 
-# Serve React frontend in production
 @app.route("/")
 def serve_frontend():
     return send_from_directory(app.static_folder, "index.html")

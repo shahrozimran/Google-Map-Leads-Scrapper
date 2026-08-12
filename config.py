@@ -45,3 +45,12 @@ EMAIL_NOISE_DOMAINS = [
     "gravatar.com",
     "schema.org",
 ]
+
+# SMTP Email Outreach Configuration
+SENDER_EMAIL = os.getenv("SENDER_EMAIL", "email@stremly.site")
+SENDER_NAME = os.getenv("SENDER_NAME", "Stremly")
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", os.getenv("SENDER_EMAIL", ""))
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", os.getenv("SENDER_APP_PASSWORD", ""))
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+
