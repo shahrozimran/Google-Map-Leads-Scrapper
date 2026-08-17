@@ -1,6 +1,7 @@
 """Google Sheets writer using gspread + service account."""
 
 import re
+import difflib
 import logging
 import gspread
 from gspread.utils import rowcol_to_a1
@@ -21,6 +22,9 @@ WITHOUT_WEBSITE_HEADERS = ["Lead ID", "Name", "Category", "Address", "Phone", "E
 # Desired column widths (pixels) for clean formatting
 WITH_WEBSITE_WIDTHS = [130, 200, 150, 250, 150, 220, 110, 250, 70, 80, 160, 300]
 WITHOUT_WEBSITE_WIDTHS = [130, 200, 150, 250, 150, 220, 110, 70, 80, 160, 300]
+
+# Similarity threshold for fuzzy duplicate detection (name + address)
+DUPLICATE_SIMILARITY_THRESHOLD = 0.85
 
 
 def _get_client(credentials_path):
@@ -61,6 +65,92 @@ def _extract_sheet_id(sheet_url):
     if match:
         return match.group(1)
     return sheet_url.strip()
+
+
+def _normalise_text(text: str) -> str:
+    """Lowercase, strip, remove non-alphanumeric for comparison."""
+    return re.sub(r'[^a-z0-9]', '', str(text).lower().strip())
+
+
+def _name_address_similarity(name_a: str, addr_a: str, name_b: str, addr_b: str) -> float:
+    """
+    Compute a combined similarity score using name + address.
+    Does NOT use phone number — phone may legitimately differ between sources.
+    Returns a float between 0.0 and 1.0.
+    """
+    name_sim = difflib.SequenceMatcher(
+        None, _normalise_text(name_a), _normalise_text(name_b)
+    ).ratio()
+    addr_sim = difflib.SequenceMatcher(
+        None, _normalise_text(addr_a), _normalise_text(addr_b)
+    ).ratio()
+    # Weighted average: name is slightly more reliable than address
+    return (name_sim * 0.6) + (addr_sim * 0.4)
+
+
+def get_existing_lead_data(sheet_url, credentials_path):
+    """
+    Read both worksheets and return:
+      - existing_ids: set of Lead ID strings already in the sheet
+      - existing_records: list of dicts with 'lead_id', 'name', 'address' for fuzzy matching
+
+    Used by the scraper to detect and skip duplicate leads before writing.
+    """
+    client = _get_client(credentials_path)
+    sheet_id = _extract_sheet_id(sheet_url)
+    spreadsheet = client.open_by_key(sheet_id)
+
+    existing_ids = set()
+    existing_records = []
+
+    for title in ["With Website", "Without Website"]:
+        try:
+            ws = spreadsheet.worksheet(title)
+            records = ws.get_all_records()
+            for row in records:
+                lead_id = str(row.get("Lead ID", "")).strip()
+                name    = str(row.get("Name", "")).strip()
+                address = str(row.get("Address", "")).strip()
+                if lead_id:
+                    existing_ids.add(lead_id)
+                if name:
+                    existing_records.append({
+                        "lead_id": lead_id,
+                        "name": name,
+                        "address": address,
+                    })
+        except Exception as e:
+            logger.warning(f"Could not read worksheet '{title}' for duplicate check: {e}")
+
+    return existing_ids, existing_records
+
+
+def is_duplicate_lead(biz: dict, existing_ids: set, existing_records: list) -> bool:
+    """
+    Returns True if `biz` is already present in the sheet.
+
+    Detection strategy (fuzzy, Option B):
+      1. Exact Lead ID match (fast path).
+      2. Fuzzy name+address similarity ≥ DUPLICATE_SIMILARITY_THRESHOLD (no phone).
+    """
+    lead_id = biz.get("lead_id", "").strip()
+
+    # Fast path: exact ID match
+    if lead_id and lead_id in existing_ids:
+        return True
+
+    # Fuzzy path: name + address similarity
+    biz_name = biz.get("name", "")
+    biz_addr = biz.get("address", "")
+    if not biz_name:
+        return False
+
+    for record in existing_records:
+        sim = _name_address_similarity(biz_name, biz_addr, record["name"], record["address"])
+        if sim >= DUPLICATE_SIMILARITY_THRESHOLD:
+            return True
+
+    return False
 
 
 def _format_worksheet(spreadsheet, worksheet, num_cols, col_widths):
@@ -290,8 +380,17 @@ def clear_sheet(sheet_url, credentials_path):
     return True
 
 
-def write_to_sheets(query, with_website, without_website, credentials_path, sheet_url=None):
-    """Write results to a Google Sheet."""
+def write_to_sheets(query, with_website, without_website, credentials_path, sheet_url=None, append=False):
+    """
+    Write results to a Google Sheet.
+
+    Parameters
+    ----------
+    append : bool
+        If True, append new rows below existing data without clearing the sheet.
+        Headers are written only if the sheet is empty.
+        If False (default), clear the worksheet and rewrite from scratch.
+    """
     client = _get_client(credentials_path)
 
     if sheet_url:
@@ -308,25 +407,40 @@ def write_to_sheets(query, with_website, without_website, credentials_path, shee
 
     # --- "With Website" worksheet ---
     ws_with = _get_or_create_worksheet(spreadsheet, "With Website", len(WITH_WEBSITE_HEADERS))
-    ws_with.clear()
-
     rows_with = [_build_with_website_row(biz) for biz in with_website]
-    all_with = [WITH_WEBSITE_HEADERS] + rows_with
-    ws_with.update("A1", all_with, value_input_option="USER_ENTERED")
 
-    if rows_with:
-        _format_worksheet(spreadsheet, ws_with, len(WITH_WEBSITE_HEADERS), WITH_WEBSITE_WIDTHS)
+    if append:
+        # Check if sheet has headers; if empty, write headers first
+        existing_values = ws_with.get_all_values()
+        if not existing_values:
+            ws_with.update("A1", [WITH_WEBSITE_HEADERS], value_input_option="USER_ENTERED")
+            _format_worksheet(spreadsheet, ws_with, len(WITH_WEBSITE_HEADERS), WITH_WEBSITE_WIDTHS)
+        if rows_with:
+            ws_with.append_rows(rows_with, value_input_option="USER_ENTERED")
+    else:
+        ws_with.clear()
+        all_with = [WITH_WEBSITE_HEADERS] + rows_with
+        ws_with.update("A1", all_with, value_input_option="USER_ENTERED")
+        if rows_with:
+            _format_worksheet(spreadsheet, ws_with, len(WITH_WEBSITE_HEADERS), WITH_WEBSITE_WIDTHS)
 
     # --- "Without Website" worksheet ---
     ws_without = _get_or_create_worksheet(spreadsheet, "Without Website", len(WITHOUT_WEBSITE_HEADERS))
-    ws_without.clear()
-
     rows_without = [_build_without_website_row(biz) for biz in without_website]
-    all_without = [WITHOUT_WEBSITE_HEADERS] + rows_without
-    ws_without.update("A1", all_without, value_input_option="USER_ENTERED")
 
-    if rows_without:
-        _format_worksheet(spreadsheet, ws_without, len(WITHOUT_WEBSITE_HEADERS), WITHOUT_WEBSITE_WIDTHS)
+    if append:
+        existing_values_wo = ws_without.get_all_values()
+        if not existing_values_wo:
+            ws_without.update("A1", [WITHOUT_WEBSITE_HEADERS], value_input_option="USER_ENTERED")
+            _format_worksheet(spreadsheet, ws_without, len(WITHOUT_WEBSITE_HEADERS), WITHOUT_WEBSITE_WIDTHS)
+        if rows_without:
+            ws_without.append_rows(rows_without, value_input_option="USER_ENTERED")
+    else:
+        ws_without.clear()
+        all_without = [WITHOUT_WEBSITE_HEADERS] + rows_without
+        ws_without.update("A1", all_without, value_input_option="USER_ENTERED")
+        if rows_without:
+            _format_worksheet(spreadsheet, ws_without, len(WITHOUT_WEBSITE_HEADERS), WITHOUT_WEBSITE_WIDTHS)
 
     try:
         default_sheet = spreadsheet.worksheet("Sheet1")
@@ -341,6 +455,7 @@ def read_leads_from_sheet(sheet_url, credentials_path):
     """
     Reads all leads from both worksheets ('With Website' and 'Without Website').
     Returns a list of dictionaries with 1-indexed row position for email outreach processing.
+    Only returns leads with a valid email address and status 'Not Sent'.
     """
     client = _get_client(credentials_path)
     sheet_id = _extract_sheet_id(sheet_url)
@@ -351,10 +466,10 @@ def read_leads_from_sheet(sheet_url, credentials_path):
         try:
             ws = spreadsheet.worksheet(title)
             records = ws.get_all_records()
-            for idx, row in enumerate(records, start=2): # Header is row 1
+            for idx, row in enumerate(records, start=2):  # Header is row 1
                 emails = str(row.get("Email(s)", "")).strip()
                 email_status = str(row.get("Email Status", "")).strip()
-                
+
                 leads.append({
                     "row_index": idx,
                     "worksheet_title": title,

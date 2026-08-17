@@ -37,7 +37,9 @@ from sheets.google_sheets import (
     get_service_account_email,
     clear_sheet,
     read_leads_from_sheet,
-    update_lead_email_status
+    update_lead_email_status,
+    get_existing_lead_data,
+    is_duplicate_lead,
 )
 from email_templates import generate_email_content
 from email_sender import send_outreach_email, test_smtp_connection
@@ -122,9 +124,39 @@ def run_scrape_task(task_id, query, max_results, sheet_url=None, filter_type="bo
             task["status"] = "completed"
             task["sheet_url"] = None
         else:
-            sheet_url = write_to_sheets(query, with_website, without_website, credentials_path, sheet_url=sheet_url)
-            task["sheet_url"] = sheet_url
-            emit("Google Sheet updated successfully.", "success")
+            # ── Duplicate detection ──────────────────────────────────────────
+            emit("Checking existing sheet data for duplicates...")
+            try:
+                existing_ids, existing_records = get_existing_lead_data(sheet_url, credentials_path)
+                if existing_ids or existing_records:
+                    orig_total = len(with_website) + len(without_website)
+                    with_website   = [b for b in with_website   if not is_duplicate_lead(b, existing_ids, existing_records)]
+                    without_website = [b for b in without_website if not is_duplicate_lead(b, existing_ids, existing_records)]
+                    skipped = orig_total - len(with_website) - len(without_website)
+                    emit(
+                        f"Duplicate check: {skipped} lead(s) skipped (already in sheet), "
+                        f"{len(with_website) + len(without_website)} new lead(s) to write.",
+                        "info"
+                    )
+                else:
+                    emit("Sheet is empty — no duplicates to skip.", "info")
+                use_append = True
+            except Exception as dup_err:
+                emit(f"Warning: Duplicate check failed ({dup_err}). Writing full results.", "warning")
+                use_append = False
+
+            # ── Write to sheet (append new rows only) ────────────────────────
+            if with_website or without_website:
+                sheet_url = write_to_sheets(
+                    query, with_website, without_website,
+                    credentials_path, sheet_url=sheet_url,
+                    append=use_append
+                )
+                task["sheet_url"] = sheet_url
+                emit("Google Sheet updated successfully.", "success")
+            else:
+                task["sheet_url"] = sheet_url
+                emit("No new leads to write — all scraped results already exist in the sheet.", "info")
             task["status"] = "completed"
 
         emit("All done!", "success")
@@ -366,6 +398,40 @@ def outreach_preview():
 @app.route("/api/send-outreach", methods=["POST"])
 def start_outreach():
     """Launch SSE automated email outreach campaign task."""
+    data = request.get_json() or {}
+    sheet_url = data.get("sheet_url", "").strip() or DEFAULT_SHEET_URL
+
+    if not sheet_url:
+        return jsonify({"error": "Google Sheet URL is required."}), 400
+
+    task_id = str(uuid.uuid4())
+    outreach_tasks[task_id] = {
+        "status": "pending",
+        "log_queue": queue.Queue(),
+        "total_queue": 0,
+        "sent_count": 0,
+        "failed_count": 0,
+        "stopped": False
+    }
+
+    thread = threading.Thread(
+        target=run_outreach_task,
+        args=(task_id, sheet_url),
+        daemon=True
+    )
+    thread.start()
+
+    return jsonify({"task_id": task_id}), 202
+
+
+@app.route("/api/send-outreach-from-sheet", methods=["POST"])
+def start_outreach_from_sheet():
+    """
+    Launch an outreach campaign directly from the existing Google Sheet.
+    Reads all 'Not Sent' leads from the sheet and sends emails sequentially.
+    Functionally identical to /api/send-outreach — exists as a clear semantic
+    endpoint for the frontend 'Send to Sheet Emails' tab.
+    """
     data = request.get_json() or {}
     sheet_url = data.get("sheet_url", "").strip() or DEFAULT_SHEET_URL
 
