@@ -399,7 +399,7 @@ def outreach_preview():
 def start_outreach():
     """Launch SSE automated email outreach campaign task."""
     data = request.get_json() or {}
-    sheet_url = data.get("sheet_url", "").strip() or DEFAULT_SHEET_URL
+    sheet_url = (data.get("sheet_url") or "").strip() or DEFAULT_SHEET_URL
 
     if not sheet_url:
         return jsonify({"error": "Google Sheet URL is required."}), 400
@@ -433,7 +433,7 @@ def start_outreach_from_sheet():
     endpoint for the frontend 'Send to Sheet Emails' tab.
     """
     data = request.get_json() or {}
-    sheet_url = data.get("sheet_url", "").strip() or DEFAULT_SHEET_URL
+    sheet_url = (data.get("sheet_url") or "").strip() or DEFAULT_SHEET_URL
 
     if not sheet_url:
         return jsonify({"error": "Google Sheet URL is required."}), 400
