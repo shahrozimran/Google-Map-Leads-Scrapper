@@ -1,19 +1,18 @@
 import { useState } from 'react'
 
-const SOURCE_OPTIONS = [
-  { value: 'google_maps',   label: 'Google Maps',   color: 'blue' },
-  { value: 'google_search', label: 'Google Search', color: 'indigo' },
-  { value: 'duckduckgo',    label: 'DuckDuckGo',    color: 'orange' },
+const SOURCES = [
+  { value: 'google_maps',   label: 'Google Maps'   },
+  { value: 'google_search', label: 'Google Search' },
+  { value: 'duckduckgo',    label: 'DuckDuckGo'    },
 ]
 
-const colorMap = {
-  blue:   { on: 'bg-blue-500/20 border-blue-400 text-blue-300',     dot: 'bg-blue-400' },
-  indigo: { on: 'bg-indigo-500/20 border-indigo-400 text-indigo-300', dot: 'bg-indigo-400' },
-  orange: { on: 'bg-orange-500/20 border-orange-400 text-orange-300', dot: 'bg-orange-400' },
-}
+const FILTERS = [
+  { value: 'both',            label: 'All'          },
+  { value: 'with_website',    label: 'With website' },
+  { value: 'without_website', label: 'No website'   },
+]
 
-// Example queries shown as clickable pills below the input
-const EXAMPLE_QUERIES = [
+const EXAMPLES = [
   'Restaurants in New York',
   'Dentists in London',
   'Plumbers in Dubai',
@@ -22,148 +21,205 @@ const EXAMPLE_QUERIES = [
   'Lawyers in Sydney',
 ]
 
+/* ── Field wrapper ──────────────────────────────────────────── */
+function Field({ label, children }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <label style={{
+        fontSize: '10px',
+        fontWeight: '600',
+        color: 'var(--ink-3)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.08em',
+      }}>
+        {label}
+      </label>
+      {children}
+    </div>
+  )
+}
+
+/* ── Toggle pill ────────────────────────────────────────────── */
+function Pill({ active, onClick, disabled, children }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        padding: '5px 12px',
+        fontSize: '12px',
+        fontWeight: active ? '600' : '400',
+        borderRadius: '20px',
+        border: `1px solid ${active ? 'var(--ink)' : 'var(--border)'}`,
+        backgroundColor: active ? 'var(--ink)' : 'transparent',
+        color: active ? '#fff' : 'var(--ink-2)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        transition: 'all 0.15s',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+/* ── Divider ────────────────────────────────────────────────── */
+function Divider() {
+  return <div style={{ height: '1px', backgroundColor: 'var(--border)', margin: '4px 0' }} />
+}
+
+/* ── Form ───────────────────────────────────────────────────── */
 function SearchForm({ onStart, isRunning }) {
-  const [query, setQuery] = useState('')
+  const [query,      setQuery]      = useState('')
   const [maxResults, setMaxResults] = useState(100)
-  const [filter, setFilter] = useState('both')
-  const [sources, setSources] = useState(['google_maps', 'google_search', 'duckduckgo'])
+  const [filter,     setFilter]     = useState('both')
+  const [sources,    setSources]    = useState(['google_maps', 'google_search', 'duckduckgo'])
 
-  const toggleSource = (value) => {
-    setSources(prev =>
-      prev.includes(value)
-        ? prev.filter(s => s !== value)
-        : [...prev, value]
-    )
-  }
+  const toggle = val =>
+    setSources(prev => prev.includes(val) ? prev.filter(s => s !== val) : [...prev, val])
 
-  const handleSubmit = (e) => {
+  const handleSubmit = e => {
     e.preventDefault()
-    if (query.trim() && sources.length > 0) {
-      onStart(query.trim(), maxResults, filter, sources)
-    }
+    if (query.trim() && sources.length > 0) onStart(query.trim(), maxResults, filter, sources)
   }
+
+  const canSubmit = !isRunning && query.trim() && sources.length > 0
 
   return (
-    <form onSubmit={handleSubmit} className="bg-surface border border-white/10 p-4 sm:p-6 space-y-4 sm:space-y-5">
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
 
-      {/* Search Query — single free-form field */}
-      <div className="space-y-2">
-        <label className="text-sm text-zinc-400 font-medium">Search Query</label>
-        <input
-          type="text"
+      {/* Query input */}
+      <Field label="Search Query">
+        <textarea
+          rows={2}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="e.g. Restaurants in New York, Dentists in London, Hotels in Dubai..."
+          onChange={e => setQuery(e.target.value)}
+          placeholder="e.g. Dentists in London"
           disabled={isRunning}
-          className="w-full bg-black border border-white/20 px-4 py-3 text-white placeholder-zinc-600 focus:border-white focus:outline-none transition-colors disabled:opacity-50 text-sm"
+          style={{
+            resize: 'none',
+            width: '100%',
+            padding: '9px 12px',
+            fontSize: '13px',
+            lineHeight: '1.5',
+            color: 'var(--ink)',
+            backgroundColor: 'var(--bg)',
+            border: '1px solid var(--border)',
+            borderRadius: '7px',
+            outline: 'none',
+            transition: 'border-color 0.15s',
+            opacity: isRunning ? 0.5 : 1,
+            fontFamily: 'inherit',
+          }}
+          onFocus={e => { e.target.style.borderColor = 'var(--ink)' }}
+          onBlur={e  => { e.target.style.borderColor = 'var(--border)' }}
         />
-        {/* Example query pills */}
-        <div className="flex flex-wrap gap-1.5">
-          {EXAMPLE_QUERIES.map(ex => (
+        {/* Example pills */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+          {EXAMPLES.map(ex => (
             <button
               key={ex}
               type="button"
               disabled={isRunning}
               onClick={() => setQuery(ex)}
-              className="text-xs px-2.5 py-1 border border-white/10 text-zinc-500 hover:border-white/30 hover:text-zinc-300 transition-colors disabled:opacity-40"
+              style={{
+                padding: '2px 8px',
+                fontSize: '10px',
+                color: 'var(--ink-3)',
+                backgroundColor: 'transparent',
+                border: '1px solid var(--border)',
+                borderRadius: '20px',
+                cursor: isRunning ? 'not-allowed' : 'pointer',
+                transition: 'all 0.15s',
+                opacity: isRunning ? 0.4 : 1,
+              }}
+              onMouseEnter={e => { if (!isRunning) { e.currentTarget.style.borderColor = 'var(--border-dark)'; e.currentTarget.style.color = 'var(--ink-2)' } }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--ink-3)' }}
             >
               {ex}
             </button>
           ))}
         </div>
-      </div>
+      </Field>
 
-      {/* Sources toggle */}
-      <div className="space-y-2">
-        <label className="text-sm text-zinc-400 font-medium">Sources</label>
-        <div className="grid grid-cols-3 gap-2">
-          {SOURCE_OPTIONS.map((opt) => {
-            const active = sources.includes(opt.value)
-            const cls = colorMap[opt.color]
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                disabled={isRunning}
-                onClick={() => toggleSource(opt.value)}
-                className={`flex items-center justify-center gap-1.5 py-2 px-2 sm:px-3 text-xs sm:text-sm font-medium border transition-colors disabled:opacity-50 leading-tight ${
-                  active
-                    ? cls.on
-                    : 'bg-black text-zinc-500 border-white/10 hover:border-white/30'
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${active ? cls.dot : 'bg-zinc-600'}`}></span>
-                {opt.label}
-              </button>
-            )
-          })}
-        </div>
-        {sources.length === 0 && (
-          <p className="text-xs text-red-400">Select at least one source.</p>
-        )}
-      </div>
+      <Divider />
 
-      {/* Filter */}
-      <div className="space-y-2">
-        <label className="text-sm text-zinc-400 font-medium">Filter</label>
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            { value: 'both',            label: 'Both' },
-            { value: 'with_website',    label: 'With Website' },
-            { value: 'without_website', label: 'No Website' },
-          ].map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              disabled={isRunning}
-              onClick={() => setFilter(opt.value)}
-              className={`py-2 px-2 sm:px-3 text-xs sm:text-sm font-medium border transition-colors disabled:opacity-50 leading-tight ${
-                filter === opt.value
-                  ? 'bg-white text-black border-white'
-                  : 'bg-black text-zinc-400 border-white/20 hover:border-white/40'
-              }`}
-            >
-              {opt.label}
-            </button>
+      {/* Sources */}
+      <Field label="Data Sources">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+          {SOURCES.map(s => (
+            <Pill key={s.value} active={sources.includes(s.value)} disabled={isRunning} onClick={() => toggle(s.value)}>
+              {s.label}
+            </Pill>
           ))}
         </div>
-      </div>
+        {sources.length === 0 && (
+          <span style={{ fontSize: '11px', color: 'var(--danger)' }}>Select at least one source.</span>
+        )}
+      </Field>
 
-      {/* Max Results */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="text-sm text-zinc-400 font-medium">Max Results</label>
-          <span className="text-sm font-mono text-white">{maxResults}</span>
+      {/* Filter */}
+      <Field label="Filter">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+          {FILTERS.map(f => (
+            <Pill key={f.value} active={filter === f.value} disabled={isRunning} onClick={() => setFilter(f.value)}>
+              {f.label}
+            </Pill>
+          ))}
         </div>
+      </Field>
+
+      <Divider />
+
+      {/* Max results */}
+      <Field label={`Max Results — ${maxResults}`}>
         <input
           type="range"
-          min="20"
-          max="500"
-          step="10"
+          min="20" max="500" step="10"
           value={maxResults}
-          onChange={(e) => setMaxResults(Number(e.target.value))}
+          onChange={e => setMaxResults(Number(e.target.value))}
           disabled={isRunning}
-          className="w-full h-1 bg-white/20 appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-none disabled:opacity-50"
+          style={{ width: '100%' }}
         />
-        <div className="flex justify-between text-xs text-zinc-600">
-          <span>20</span>
-          <span>500</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--ink-3)' }}>
+          <span>20</span><span>500</span>
         </div>
-      </div>
+      </Field>
 
+      {/* Submit */}
       <button
         type="submit"
-        disabled={isRunning || !query.trim() || sources.length === 0}
-        className="w-full bg-white text-black font-semibold py-3 px-6 hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        disabled={!canSubmit}
+        style={{
+          width: '100%',
+          padding: '10px',
+          fontSize: '13px',
+          fontWeight: '600',
+          backgroundColor: canSubmit ? 'var(--ink)' : 'var(--border)',
+          color: canSubmit ? '#fff' : 'var(--ink-3)',
+          border: 'none',
+          borderRadius: '7px',
+          cursor: canSubmit ? 'pointer' : 'not-allowed',
+          transition: 'all 0.15s',
+          letterSpacing: '0.01em',
+          marginTop: '2px',
+        }}
+        onMouseEnter={e => { if (canSubmit) e.currentTarget.style.opacity = '0.83' }}
+        onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
       >
         {isRunning ? (
-          <span className="flex items-center justify-center gap-2">
-            <span className="w-2 h-2 bg-black rounded-full animate-pulse-dot"></span>
-            Scraping...
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{
+              width: '6px', height: '6px', borderRadius: '50%',
+              backgroundColor: '#888',
+              display: 'inline-block',
+              animation: 'pulse-dot 1.4s ease-in-out infinite',
+            }} />
+            Scraping in progress...
           </span>
-        ) : (
-          'Start Scraping'
-        )}
+        ) : 'Start Scraping'}
       </button>
     </form>
   )

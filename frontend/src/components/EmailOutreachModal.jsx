@@ -1,40 +1,81 @@
 import React, { useState, useEffect, useRef } from 'react';
 
+/* ── small helpers ────────────────────────────────────────────── */
+const labelStyle = {
+  fontSize: '11px',
+  fontWeight: '600',
+  color: 'var(--ink-3)',
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+};
+
+const cardStyle = {
+  backgroundColor: 'var(--bg)',
+  border: '1px solid var(--border)',
+  borderRadius: '8px',
+  padding: '16px 18px',
+};
+
+function StatCard({ label, value, mono = true }) {
+  return (
+    <div style={cardStyle}>
+      <div style={labelStyle}>{label}</div>
+      <div style={{
+        marginTop: '6px',
+        fontSize: '26px',
+        fontWeight: '700',
+        fontFamily: mono ? "'JetBrains Mono', monospace" : 'inherit',
+        color: 'var(--ink)',
+        lineHeight: 1,
+      }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function InfoBanner({ children }) {
+  return (
+    <div style={{
+      backgroundColor: 'var(--bg)',
+      border: '1px solid var(--border)',
+      borderRadius: '8px',
+      padding: '14px 16px',
+      fontSize: '12px',
+      color: 'var(--ink-2)',
+      lineHeight: '1.6',
+    }}>
+      {children}
+    </div>
+  );
+}
+
+/* ── main modal ───────────────────────────────────────────────── */
 export default function EmailOutreachModal({ isOpen, onClose, sheetUrl }) {
-  const [activeTab, setActiveTab] = useState('campaign'); // 'campaign', 'preview', 'test', 'sheet'
-  const [previewData, setPreviewData] = useState(null);
+  const [activeTab, setActiveTab] = useState('campaign');
+  const [previewData, setPreviewData]     = useState(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
-  // Campaign Execution State (shared between Campaign Console and Sheet Outreach tabs)
   const [isCampaignRunning, setIsCampaignRunning] = useState(false);
-  const [taskId, setTaskId] = useState(null);
-  const [logs, setLogs] = useState([]);
-  const [sentCount, setSentCount] = useState(0);
+  const [taskId, setTaskId]           = useState(null);
+  const [logs, setLogs]               = useState([]);
+  const [sentCount, setSentCount]     = useState(0);
   const [failedCount, setFailedCount] = useState(0);
-  const [queueCount, setQueueCount] = useState(0);
+  const [queueCount, setQueueCount]   = useState(0);
   const [campaignFinished, setCampaignFinished] = useState(false);
-  const [activeSource, setActiveSource] = useState(null); // 'campaign' | 'sheet'
+  const [activeSource, setActiveSource] = useState(null);
 
-  // Test Email State
   const [testEmailInput, setTestEmailInput] = useState('');
   const [testStatus, setTestStatus] = useState({ loading: false, message: '', isError: false });
 
   const terminalEndRef = useRef(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      fetchPreview();
-    }
-  }, [isOpen, sheetUrl]);
+  useEffect(() => { if (isOpen) fetchPreview(); }, [isOpen, sheetUrl]);
 
-  // Reset state on modal close
   useEffect(() => {
     if (!isOpen) {
-      setLogs([]);
-      setSentCount(0);
-      setFailedCount(0);
-      setCampaignFinished(false);
-      setActiveSource(null);
+      setLogs([]); setSentCount(0); setFailedCount(0);
+      setCampaignFinished(false); setActiveSource(null);
     }
   }, [isOpen]);
 
@@ -45,58 +86,40 @@ export default function EmailOutreachModal({ isOpen, onClose, sheetUrl }) {
   const fetchPreview = async () => {
     setLoadingPreview(true);
     try {
-      const res = await fetch(`/api/outreach-preview?sheet_url=${encodeURIComponent(sheetUrl || '')}`);
+      const res  = await fetch(`/api/outreach-preview?sheet_url=${encodeURIComponent(sheetUrl || '')}`);
       const data = await res.json();
       setPreviewData(data);
       setQueueCount(data.queue_count || 0);
-    } catch (err) {
-      console.error('Failed to load email preview:', err);
-    } finally {
-      setLoadingPreview(false);
-    }
+    } catch { /* skip */ }
+    finally { setLoadingPreview(false); }
   };
 
   const listenToStream = (id) => {
-    const eventSource = new EventSource(`/api/outreach-progress/${id}`);
-    eventSource.onmessage = (event) => {
+    const es = new EventSource(`/api/outreach-progress/${id}`);
+    es.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
         if (payload.keepalive) return;
         if (payload.done) {
-          setIsCampaignRunning(false);
-          setCampaignFinished(true);
-          setActiveSource(null);
-          eventSource.close();
-          fetchPreview();
-          return;
+          setIsCampaignRunning(false); setCampaignFinished(true);
+          setActiveSource(null); es.close(); fetchPreview(); return;
         }
-        setLogs((prev) => [...prev, payload]);
-        if (payload.level === 'success' && payload.message.includes('Delivered email to')) {
-          setSentCount((c) => c + 1);
-        }
-        if (payload.level === 'error' && payload.message.includes('Failed to send')) {
-          setFailedCount((c) => c + 1);
-        }
-      } catch (err) {
-        console.error('Error parsing SSE event:', err);
-      }
+        setLogs(prev => [...prev, payload]);
+        if (payload.level === 'success' && payload.message.includes('Delivered email to'))
+          setSentCount(c => c + 1);
+        if (payload.level === 'error' && payload.message.includes('Failed to send'))
+          setFailedCount(c => c + 1);
+      } catch { /* skip */ }
     };
-    eventSource.onerror = () => {
-      setIsCampaignRunning(false);
-      setActiveSource(null);
-      eventSource.close();
-    };
+    es.onerror = () => { setIsCampaignRunning(false); setActiveSource(null); es.close(); };
   };
 
   const startCampaign = async (endpoint = '/api/send-outreach', source = 'campaign') => {
-    setIsCampaignRunning(true);
-    setCampaignFinished(false);
-    setActiveSource(source);
+    setIsCampaignRunning(true); setCampaignFinished(false); setActiveSource(source);
     setLogs([{ message: 'Initializing outreach campaign...', level: 'info', time: Date.now() / 1000 }]);
-    setSentCount(0);
-    setFailedCount(0);
+    setSentCount(0); setFailedCount(0);
     try {
-      const res = await fetch(endpoint, {
+      const res  = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sheet_url: sheetUrl })
@@ -106,268 +129,216 @@ export default function EmailOutreachModal({ isOpen, onClose, sheetUrl }) {
       setTaskId(data.task_id);
       listenToStream(data.task_id);
     } catch (err) {
-      setIsCampaignRunning(false);
-      setActiveSource(null);
-      setLogs((prev) => [...prev, { message: `Launch Error: ${err.message}`, level: 'error', time: Date.now() / 1000 }]);
+      setIsCampaignRunning(false); setActiveSource(null);
+      setLogs(prev => [...prev, { message: `Error: ${err.message}`, level: 'error', time: Date.now() / 1000 }]);
     }
   };
 
   const stopCampaign = async () => {
     if (!taskId) return;
-    try {
-      await fetch(`/api/stop-outreach/${taskId}`, { method: 'POST' });
-      setLogs((prev) => [...prev, { message: 'Stopping campaign execution...', level: 'warning', time: Date.now() / 1000 }]);
-    } catch (err) {
-      console.error('Failed to stop campaign:', err);
-    }
+    try { await fetch(`/api/stop-outreach/${taskId}`, { method: 'POST' }); }
+    catch { /* skip */ }
+    setLogs(prev => [...prev, { message: 'Stopping campaign...', level: 'warning', time: Date.now() / 1000 }]);
   };
 
   const sendTestEmail = async () => {
-    if (!testEmailInput || !testEmailInput.includes('@')) {
+    if (!testEmailInput.includes('@')) {
       setTestStatus({ loading: false, message: 'Please enter a valid email address.', isError: true });
       return;
     }
-    setTestStatus({ loading: true, message: 'Sending test email via Gmail SMTP...', isError: false });
+    setTestStatus({ loading: true, message: 'Sending...', isError: false });
     try {
-      const res = await fetch('/api/test-email', {
+      const res  = await fetch('/api/test-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ test_email: testEmailInput })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send test email');
-      setTestStatus({ loading: false, message: `Success! Test email delivered to ${testEmailInput}`, isError: false });
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setTestStatus({ loading: false, message: `Test email delivered to ${testEmailInput}`, isError: false });
     } catch (err) {
-      setTestStatus({ loading: false, message: `Error: ${err.message}`, isError: true });
+      setTestStatus({ loading: false, message: err.message, isError: true });
     }
   };
 
   if (!isOpen) return null;
 
   const TABS = [
-    { id: 'campaign', label: '⚡ Campaign Console' },
-    { id: 'sheet',    label: '📬 Send to Sheet Emails' },
-    { id: 'preview',  label: '📄 Email Template Preview' },
-    { id: 'test',     label: '🧪 Send Test Email' },
+    { id: 'campaign', label: 'Campaign Console'     },
+    { id: 'sheet',    label: 'Send to Sheet Emails' },
+    { id: 'preview',  label: 'Template Preview'     },
+    { id: 'test',     label: 'Send Test Email'      },
   ];
 
-  // Shared terminal console rendered in both campaign + sheet tabs
-  const renderTerminal = () => (
-    <div style={{
-      flex: 1,
-      backgroundColor: '#09090b',
-      border: '1px solid #27272a',
-      borderRadius: '10px',
-      padding: '16px',
-      fontFamily: 'monospace',
-      fontSize: '12px',
-      overflowY: 'auto',
-      minHeight: '220px',
-      boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.6)'
-    }}>
-      <div style={{ color: '#71717a', marginBottom: '8px', borderBottom: '1px solid #18181b', paddingBottom: '6px' }}>
-        // Real-time Campaign Outbound Console
+  /* ── shared terminal ──────────────────────────────────────── */
+  const Terminal = () => (
+    <div
+      className="log-panel"
+      style={{
+        flex: 1,
+        minHeight: '200px',
+        backgroundColor: 'var(--mono-bg)',
+        borderRadius: '8px',
+        padding: '14px 16px',
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: '12px',
+        lineHeight: '1.7',
+        overflowY: 'auto',
+        border: '1px solid #2a2a2a',
+      }}
+    >
+      <div style={{ color: '#444', marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #222', fontSize: '11px' }}>
+        // outbound console
       </div>
       {logs.length === 0 ? (
-        <div style={{ color: '#52525b', fontStyle: 'italic', marginTop: '20px' }}>
-          Click the launch button to start sending emails...
-        </div>
-      ) : (
-        logs.map((log, i) => {
-          let color = '#d4d4d8';
-          if (log.level === 'success') color = '#10b981';
-          if (log.level === 'error')   color = '#f87171';
-          if (log.level === 'warning') color = '#fbbf24';
-          return (
-            <div key={i} style={{ color, marginBottom: '6px', lineHeight: '1.5' }}>
-              <span style={{ color: '#52525b', marginRight: '8px' }}>
-                [{new Date((log.time || Date.now() / 1000) * 1000).toLocaleTimeString()}]
-              </span>
-              {log.message}
-            </div>
-          );
-        })
-      )}
+        <span style={{ color: '#444' }}>Waiting for launch...</span>
+      ) : logs.map((log, i) => {
+        const c = log.level === 'success' ? '#4ade80'
+                : log.level === 'error'   ? '#f87171'
+                : log.level === 'warning' ? '#fbbf24'
+                : '#a3a3a3';
+        const p = log.level === 'success' ? '+' : log.level === 'error' ? '!' : log.level === 'warning' ? '~' : '>';
+        return (
+          <div key={i} style={{ color: c, marginBottom: '2px' }}>
+            <span style={{ color: '#444', marginRight: '8px', userSelect: 'none' }}>{p}</span>
+            {log.message}
+          </div>
+        );
+      })}
       <div ref={terminalEndRef} />
     </div>
   );
 
-  // Shared stats cards
-  const renderStatsCards = () => (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-      <div style={{ backgroundColor: '#09090b', padding: '16px', borderRadius: '10px', border: '1px solid #27272a' }}>
-        <span style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', fontWeight: '700' }}>Not Sent (Queue)</span>
-        <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981', marginTop: '4px' }}>
-          {queueCount} leads
-        </div>
-      </div>
-      <div style={{ backgroundColor: '#09090b', padding: '16px', borderRadius: '10px', border: '1px solid #27272a' }}>
-        <span style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', fontWeight: '700' }}>Sent This Session</span>
-        <div style={{ fontSize: '24px', fontWeight: '800', color: '#3b82f6', marginTop: '4px' }}>
-          {sentCount}
-        </div>
-      </div>
-      <div style={{ backgroundColor: '#09090b', padding: '16px', borderRadius: '10px', border: '1px solid #27272a' }}>
-        <span style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', fontWeight: '700' }}>Already Sent (Total)</span>
-        <div style={{ fontSize: '24px', fontWeight: '800', color: '#8b5cf6', marginTop: '4px' }}>
-          {previewData?.sent_count || 0}
-        </div>
-      </div>
-    </div>
-  );
+  /* ── shared launch / stop button ─────────────────────────── */
+  const ActionButton = ({ source, endpoint }) => {
+    const thisRunning = isCampaignRunning && activeSource === source;
+    const otherRunning = isCampaignRunning && activeSource !== source;
+    const disabled = otherRunning || (!thisRunning && queueCount === 0);
 
-  // Shared action buttons
-  const renderActionButtons = (source, endpoint) => (
-    <div style={{ display: 'flex', gap: '12px' }}>
-      {!isCampaignRunning || activeSource !== source ? (
-        <button
-          onClick={() => startCampaign(endpoint, source)}
-          disabled={isCampaignRunning || queueCount === 0}
-          style={{
-            flex: 1,
-            padding: '14px',
-            backgroundColor: (isCampaignRunning || queueCount === 0) ? '#27272a' : '#10b981',
-            color: (isCampaignRunning || queueCount === 0) ? '#71717a' : '#000000',
-            border: 'none',
-            borderRadius: '10px',
-            fontSize: '14px',
-            fontWeight: '800',
-            cursor: (isCampaignRunning || queueCount === 0) ? 'not-allowed' : 'pointer',
-            boxShadow: (isCampaignRunning || queueCount === 0) ? 'none' : '0 0 20px rgba(16, 185, 129, 0.4)',
-            transition: 'all 0.2s ease'
-          }}
-        >
-          {isCampaignRunning && activeSource !== source
-            ? '⏳ Another Campaign Running...'
-            : queueCount > 0
-            ? source === 'sheet'
-              ? `📬 Send to All Not Sent Leads (${queueCount})`
-              : `🚀 Launch Campaign (${queueCount} Leads Waiting)`
-            : 'No Pending Leads in Sheet Queue'}
-        </button>
-      ) : (
+    if (thisRunning) {
+      return (
         <button
           onClick={stopCampaign}
           style={{
-            flex: 1,
-            padding: '14px',
-            backgroundColor: '#ef4444',
-            color: '#ffffff',
-            border: 'none',
-            borderRadius: '10px',
-            fontSize: '14px',
-            fontWeight: '700',
-            cursor: 'pointer'
+            width: '100%', padding: '11px',
+            backgroundColor: '#991b1b', color: '#fff',
+            border: 'none', borderRadius: '7px',
+            fontSize: '13px', fontWeight: '600', cursor: 'pointer',
           }}
         >
-          ⏹ Stop Campaign Execution
+          Stop Campaign
         </button>
-      )}
-    </div>
-  );
+      );
+    }
+    return (
+      <button
+        onClick={() => startCampaign(endpoint, source)}
+        disabled={disabled}
+        style={{
+          width: '100%', padding: '11px',
+          backgroundColor: disabled ? 'var(--border)' : 'var(--ink)',
+          color: disabled ? 'var(--ink-3)' : '#fff',
+          border: 'none', borderRadius: '7px',
+          fontSize: '13px', fontWeight: '600',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          transition: 'opacity 0.15s',
+        }}
+        onMouseEnter={e => { if (!disabled) e.currentTarget.style.opacity = '0.85' }}
+        onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+      >
+        {otherRunning
+          ? 'Another campaign is running...'
+          : queueCount === 0
+          ? 'No pending leads'
+          : source === 'sheet'
+          ? `Send to All — ${queueCount} Not Sent`
+          : `Launch Campaign — ${queueCount} leads`}
+      </button>
+    );
+  };
 
   return (
     <div style={{
-      position: 'fixed',
-      inset: 0,
-      zIndex: 9999,
-      backgroundColor: 'rgba(0, 0, 0, 0.75)',
-      backdropFilter: 'blur(8px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '20px'
+      position: 'fixed', inset: 0, zIndex: 9999,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      backdropFilter: 'blur(4px)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: '20px',
     }}>
       <div style={{
-        backgroundColor: '#09090b',
-        border: '1px solid #27272a',
-        borderRadius: '16px',
+        backgroundColor: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: '12px',
         width: '100%',
-        maxWidth: '900px',
-        height: '88vh',
+        maxWidth: '820px',
+        maxHeight: '88vh',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: '0 25px 50px -12px rgba(16, 185, 129, 0.15)',
         overflow: 'hidden',
-        color: '#f4f4f5'
+        boxShadow: '0 20px 60px rgba(0,0,0,0.15)',
       }}>
-        {/* Modal Header */}
+
+        {/* Modal header */}
         <div style={{
-          padding: '20px 24px',
-          borderBottom: '1px solid #27272a',
+          padding: '18px 24px',
+          borderBottom: '1px solid var(--border)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          background: 'linear-gradient(180deg, #18181b 0%, #09090b 100%)'
+          backgroundColor: 'var(--surface)',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '10px',
-              backgroundColor: '#10b981',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 0 15px rgba(16, 185, 129, 0.4)'
-            }}>
-              <span style={{ fontSize: '20px' }}>🚀</span>
-            </div>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#ffffff', letterSpacing: '-0.3px' }}>
-                Stremly Automated Cold Outreach
-              </h3>
-              <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#a1a1aa' }}>
-                Sender Address: <strong style={{ color: '#10b981' }}>{previewData?.sender_email || 'email@stremly.site'}</strong>
-              </p>
-            </div>
+          <div>
+            <h2 style={{ margin: 0, fontSize: '15px', fontWeight: '600', color: 'var(--ink)' }}>
+              Cold Email Outreach
+            </h2>
+            <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--ink-3)' }}>
+              Sender: {previewData?.sender_email || 'email@stremly.site'}
+            </p>
           </div>
           <button
             onClick={onClose}
             disabled={isCampaignRunning}
             style={{
               background: 'transparent',
-              border: '1px solid #3f3f46',
-              color: '#a1a1aa',
-              fontSize: '18px',
-              borderRadius: '8px',
-              width: '32px',
-              height: '32px',
+              border: '1px solid var(--border)',
+              color: 'var(--ink-3)',
+              width: '30px', height: '30px',
+              borderRadius: '6px',
               cursor: isCampaignRunning ? 'not-allowed' : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
+              fontSize: '14px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              opacity: isCampaignRunning ? 0.5 : 1,
             }}
           >
-            ✕
+            ×
           </button>
         </div>
 
-        {/* Tab Selector */}
+        {/* Tabs */}
         <div style={{
-          padding: '12px 24px 0 24px',
-          borderBottom: '1px solid #27272a',
           display: 'flex',
-          gap: '4px',
-          backgroundColor: '#09090b',
-          overflowX: 'auto'
+          gap: '0',
+          borderBottom: '1px solid var(--border)',
+          backgroundColor: 'var(--bg)',
+          padding: '0 24px',
+          overflowX: 'auto',
         }}>
-          {TABS.map((tab) => (
+          {TABS.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               style={{
-                padding: '10px 14px',
+                padding: '12px 16px',
                 fontSize: '12px',
-                fontWeight: '600',
-                borderRadius: '8px 8px 0 0',
+                fontWeight: activeTab === tab.id ? '600' : '400',
+                color: activeTab === tab.id ? 'var(--ink)' : 'var(--ink-3)',
+                backgroundColor: 'transparent',
                 border: 'none',
+                borderBottom: activeTab === tab.id ? '2px solid var(--ink)' : '2px solid transparent',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
-                backgroundColor: activeTab === tab.id ? '#18181b' : 'transparent',
-                color: activeTab === tab.id ? '#10b981' : '#71717a',
-                borderBottom: activeTab === tab.id ? '2px solid #10b981' : '2px solid transparent',
-                transition: 'all 0.2s ease'
+                transition: 'color 0.15s',
+                marginBottom: '-1px',
               }}
             >
               {tab.label}
@@ -375,85 +346,69 @@ export default function EmailOutreachModal({ isOpen, onClose, sheetUrl }) {
           ))}
         </div>
 
-        {/* Modal Body */}
-        <div style={{ flex: 1, padding: '24px', overflowY: 'auto', backgroundColor: '#18181b' }}>
+        {/* Tab body */}
+        <div
+          className="modal-scroll"
+          style={{
+            flex: 1, overflowY: 'auto', padding: '24px',
+            backgroundColor: 'var(--surface)',
+            display: 'flex', flexDirection: 'column', gap: '16px',
+          }}
+        >
 
-          {/* TAB 1: CAMPAIGN CONSOLE */}
+          {/* ── Campaign Console ─────────────────────────────── */}
           {activeTab === 'campaign' && (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '16px' }}>
-              {renderStatsCards()}
-              {renderActionButtons('campaign', '/api/send-outreach')}
-              {renderTerminal()}
-            </div>
-          )}
-
-          {/* TAB 2: SEND TO SHEET EMAILS */}
-          {activeTab === 'sheet' && (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '16px' }}>
-              {/* Info banner */}
-              <div style={{
-                backgroundColor: '#09090b',
-                border: '1px solid #1d4ed8',
-                borderRadius: '10px',
-                padding: '14px 18px',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '12px'
-              }}>
-                <span style={{ fontSize: '20px', flexShrink: 0 }}>📬</span>
-                <div>
-                  <div style={{ fontSize: '14px', fontWeight: '700', color: '#93c5fd', marginBottom: '4px' }}>
-                    Send to Existing Sheet Leads
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#a1a1aa', lineHeight: '1.6' }}>
-                    Reads all leads directly from your connected Google Sheet and sends emails to every row with status&nbsp;
-                    <strong style={{ color: '#10b981' }}>Not Sent</strong>. Rows marked&nbsp;
-                    <strong style={{ color: '#3b82f6' }}>Sent</strong> or&nbsp;
-                    <strong style={{ color: '#71717a' }}>NULL</strong> are automatically skipped.
-                    Status updates in real time as each email is delivered.
-                  </div>
-                </div>
-              </div>
-
-              {/* Status summary */}
+            <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
-                <div style={{ backgroundColor: '#09090b', padding: '14px', borderRadius: '10px', border: '1px solid #27272a' }}>
-                  <span style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', fontWeight: '700' }}>Not Sent (Ready)</span>
-                  <div style={{ fontSize: '26px', fontWeight: '800', color: '#10b981', marginTop: '4px' }}>{queueCount}</div>
-                </div>
-                <div style={{ backgroundColor: '#09090b', padding: '14px', borderRadius: '10px', border: '1px solid #27272a' }}>
-                  <span style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', fontWeight: '700' }}>Already Sent</span>
-                  <div style={{ fontSize: '26px', fontWeight: '800', color: '#3b82f6', marginTop: '4px' }}>{previewData?.sent_count || 0}</div>
-                </div>
-                <div style={{ backgroundColor: '#09090b', padding: '14px', borderRadius: '10px', border: '1px solid #27272a' }}>
-                  <span style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', fontWeight: '700' }}>Sent This Session</span>
-                  <div style={{ fontSize: '26px', fontWeight: '800', color: '#8b5cf6', marginTop: '4px' }}>{sentCount}</div>
-                </div>
+                <StatCard label="Not Sent"      value={queueCount} />
+                <StatCard label="Sent (Session)" value={sentCount} />
+                <StatCard label="Total Sent"    value={previewData?.sent_count || 0} />
               </div>
-
-              {renderActionButtons('sheet', '/api/send-outreach-from-sheet')}
-              {renderTerminal()}
-            </div>
+              <ActionButton source="campaign" endpoint="/api/send-outreach" />
+              <Terminal />
+            </>
           )}
 
-          {/* TAB 3: TEMPLATE PREVIEW */}
+          {/* ── Send to Sheet Emails ─────────────────────────── */}
+          {activeTab === 'sheet' && (
+            <>
+              <InfoBanner>
+                Sends emails to every row with status{' '}
+                <strong style={{ color: 'var(--ink)' }}>Not Sent</strong> in your connected Google Sheet.
+                Rows marked <strong style={{ color: 'var(--ink)' }}>Sent</strong> or{' '}
+                <strong style={{ color: 'var(--ink)' }}>NULL</strong> are automatically skipped.
+                Sheet statuses update in real time as each email is delivered.
+              </InfoBanner>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                <StatCard label="Not Sent (Ready)"  value={queueCount} />
+                <StatCard label="Already Sent"      value={previewData?.sent_count || 0} />
+                <StatCard label="Sent This Session" value={sentCount} />
+              </div>
+              <ActionButton source="sheet" endpoint="/api/send-outreach-from-sheet" />
+              <Terminal />
+            </>
+          )}
+
+          {/* ── Template Preview ─────────────────────────────── */}
           {activeTab === 'preview' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div style={{ backgroundColor: '#09090b', padding: '12px 16px', borderRadius: '8px', border: '1px solid #27272a' }}>
-                <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Subject Line:</span>
-                <div style={{ fontSize: '14px', fontWeight: '700', color: '#10b981', marginTop: '2px' }}>
-                  {previewData?.sample_preview?.subject || 'Software & AI Automation Solutions for {business_name}'}
+            <>
+              <div style={cardStyle}>
+                <div style={labelStyle}>Subject Line</div>
+                <div style={{ marginTop: '6px', fontSize: '13px', fontWeight: '500', color: 'var(--ink)' }}>
+                  {previewData?.sample_preview?.subject || 'Loading...'}
                 </div>
               </div>
               {loadingPreview ? (
-                <div style={{ textAlign: 'center', padding: '40px', color: '#a1a1aa' }}>Loading Stremly email template preview...</div>
+                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--ink-3)', fontSize: '13px' }}>
+                  Loading email template...
+                </div>
               ) : (
                 <div style={{
-                  backgroundColor: '#ffffff',
+                  border: '1px solid var(--border)',
                   borderRadius: '8px',
-                  border: '1px solid #27272a',
                   overflow: 'hidden',
-                  height: '420px'
+                  height: '420px',
+                  backgroundColor: '#fff',
                 }}>
                   <iframe
                     title="Email Template Preview"
@@ -462,60 +417,69 @@ export default function EmailOutreachModal({ isOpen, onClose, sheetUrl }) {
                   />
                 </div>
               )}
-            </div>
+            </>
           )}
 
-          {/* TAB 4: TEST EMAIL */}
+          {/* ── Send Test Email ──────────────────────────────── */}
           {activeTab === 'test' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '500px', margin: '20px auto' }}>
-              <div style={{ backgroundColor: '#09090b', padding: '20px', borderRadius: '12px', border: '1px solid #27272a' }}>
-                <h4 style={{ margin: '0 0 8px 0', fontSize: '15px', color: '#ffffff' }}>Send a Test Email</h4>
-                <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#a1a1aa', lineHeight: '1.5' }}>
-                  Send a live test email to your inbox to verify HTML rendering, logo graphics, and deliverability before running the campaign.
-                </p>
+            <div style={{ maxWidth: '460px' }}>
+              <div style={{ ...cardStyle, display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--ink)', marginBottom: '4px' }}>
+                    Send a Test Email
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--ink-3)', lineHeight: '1.5' }}>
+                    Verify HTML rendering and deliverability before running the full campaign.
+                  </div>
+                </div>
+
                 <input
                   type="email"
-                  placeholder="Enter your personal email (e.g. yourname@gmail.com)"
+                  placeholder="yourname@gmail.com"
                   value={testEmailInput}
-                  onChange={(e) => setTestEmailInput(e.target.value)}
+                  onChange={e => setTestEmailInput(e.target.value)}
                   style={{
                     width: '100%',
-                    padding: '12px',
-                    backgroundColor: '#18181b',
-                    border: '1px solid #3f3f46',
-                    borderRadius: '8px',
-                    color: '#ffffff',
-                    fontSize: '14px',
-                    marginBottom: '14px',
-                    boxSizing: 'border-box'
+                    padding: '10px 14px',
+                    fontSize: '13px',
+                    color: 'var(--ink)',
+                    backgroundColor: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '7px',
+                    outline: 'none',
                   }}
+                  onFocus={e => { e.target.style.borderColor = 'var(--ink)' }}
+                  onBlur={e  => { e.target.style.borderColor = 'var(--border)' }}
                 />
+
                 <button
                   onClick={sendTestEmail}
                   disabled={testStatus.loading}
                   style={{
-                    width: '100%',
-                    padding: '12px',
-                    backgroundColor: '#10b981',
-                    color: '#000000',
-                    fontWeight: '700',
+                    padding: '10px 20px',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    backgroundColor: testStatus.loading ? 'var(--border)' : 'var(--ink)',
+                    color: testStatus.loading ? 'var(--ink-3)' : '#fff',
                     border: 'none',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    cursor: testStatus.loading ? 'not-allowed' : 'pointer'
+                    borderRadius: '7px',
+                    cursor: testStatus.loading ? 'not-allowed' : 'pointer',
+                    transition: 'opacity 0.15s',
                   }}
+                  onMouseEnter={e => { if (!testStatus.loading) e.currentTarget.style.opacity = '0.85' }}
+                  onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
                 >
-                  {testStatus.loading ? 'Sending Test Email...' : '✉️ Send Test Email Now'}
+                  {testStatus.loading ? 'Sending...' : 'Send Test Email'}
                 </button>
+
                 {testStatus.message && (
                   <div style={{
-                    marginTop: '14px',
                     padding: '10px 12px',
                     borderRadius: '6px',
                     fontSize: '12px',
-                    backgroundColor: testStatus.isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
-                    color: testStatus.isError ? '#f87171' : '#10b981',
-                    border: `1px solid ${testStatus.isError ? '#ef4444' : '#10b981'}`
+                    backgroundColor: testStatus.isError ? '#fef2f2' : '#f0fdf4',
+                    color: testStatus.isError ? 'var(--danger)' : 'var(--success)',
+                    border: `1px solid ${testStatus.isError ? '#fecaca' : '#bbf7d0'}`,
                   }}>
                     {testStatus.message}
                   </div>
@@ -523,6 +487,7 @@ export default function EmailOutreachModal({ isOpen, onClose, sheetUrl }) {
               </div>
             </div>
           )}
+
         </div>
       </div>
     </div>

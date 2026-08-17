@@ -2,56 +2,126 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Design tokens ────────────────────────────────────────────── */
+:root {
+  --bg:         #f5f2ee;   /* warm off-white page background     */
+  --surface:    #ffffff;   /* card / panel background             */
+  --border:     #ddd5c8;   /* default border                      */
+  --border-dark:#c9bfb0;   /* hover / active border               */
+  --ink:        #111111;   /* primary text                        */
+  --ink-2:      #444444;   /* secondary text                      */
+  --ink-3:      #888888;   /* muted / placeholder                 */
+  --accent:     #111111;   /* button fill — solid black           */
+  --accent-fg:  #ffffff;   /* button text on black                */
+  --success:    #2d6a4f;   /* success green (earthy)              */
+  --warning:    #92400e;   /* amber-brown warning                 */
+  --danger:     #991b1b;   /* red danger                          */
+  --mono-bg:    #1a1a1a;   /* terminal / code panel               */
+}
+
+/* ── Base ─────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
 body {
   margin: 0;
   padding: 0;
-  background-color: #000000;
-  color: #ffffff;
+  background-color: var(--bg);
+  color: var(--ink);
   font-family: 'Inter', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
 }
 
-* {
-  -webkit-tap-highlight-color: transparent;
-  box-sizing: border-box;
+/* ── Inputs ───────────────────────────────────────────────────── */
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
 }
 
-/* Custom scrollbar for log panel */
+input::placeholder {
+  color: var(--ink-3);
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────── */
 .log-panel::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
-
 .log-panel::-webkit-scrollbar-track {
-  background: #0a0a0a;
+  background: #111;
 }
-
 .log-panel::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 3px;
+  background: #3a3a3a;
+  border-radius: 2px;
 }
-
 .log-panel::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
 
-/* Pulsing animation for scraping status */
+/* modal scrollbar */
+.modal-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.modal-scroll::-webkit-scrollbar-track {
+  background: #f5f2ee;
+}
+.modal-scroll::-webkit-scrollbar-thumb {
+  background: #c9bfb0;
+  border-radius: 2px;
+}
+
+/* ── Animations ───────────────────────────────────────────────── */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  50%       { opacity: 0.25; }
 }
-
 .animate-pulse-dot {
-  animation: pulse-dot 1.5s ease-in-out infinite;
+  animation: pulse-dot 1.4s ease-in-out infinite;
 }
 
-/* Fade-in for log lines */
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fade-in 0.18s ease-out forwards;
 }
 
-.animate-fade-in {
-  animation: fade-in 0.2s ease-out forwards;
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slide-up 0.22s ease-out forwards;
+}
+
+/* ── Range input ──────────────────────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 2px;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink);
+  cursor: pointer;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+input[type="range"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

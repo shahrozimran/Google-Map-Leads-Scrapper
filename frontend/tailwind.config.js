@@ -7,8 +7,19 @@ export default {
   theme: {
     extend: {
       colors: {
-        surface: '#111111',
-        background: '#000000',
+        beige: {
+          50:  '#faf9f7',
+          100: '#f5f2ee',
+          200: '#ede8e1',
+          300: '#ddd5c8',
+          400: '#c9bfb0',
+          500: '#b5a898',
+        },
+        ink: {
+          DEFAULT: '#111111',
+          soft:    '#1a1a1a',
+          muted:   '#2a2a2a',
+        }
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
